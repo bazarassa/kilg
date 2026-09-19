@@ -15,22 +15,22 @@ import (
 
 // Job is the tracked state of one generation.
 type Job struct {
-	ID           string
-	Provider     string
-	Model        string
-	Status       string
-	Sequence     uint64
-	Events       uint64
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
-	StartedAt    time.Time
-	CompletedAt  time.Time
-	FinishReason string
-	Error        string
-	Content      string
-	Reasoning    string
+	ID                 string
+	Provider           string
+	Model              string
+	Status             string
+	Sequence           uint64
+	Events             uint64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+	StartedAt          time.Time
+	CompletedAt        time.Time
+	FinishReason       string
+	Error              string
+	Content            string
+	Reasoning          string
 	ReasoningAvailable bool
-	Usage        json.RawMessage
+	Usage              json.RawMessage
 }
 
 // Store is the job state interface.
