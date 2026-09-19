@@ -12,7 +12,7 @@ type Stream struct {
 	// Ch receives events destined for this stream.
 	Ch chan protocol.Event
 	// Closed is closed when the client disconnects.
-	Closed chan struct{}
+	Closed    chan struct{}
 	closeOnce sync.Once
 }
 
@@ -26,9 +26,9 @@ func (s *Stream) Close() {
 // Events for requests without a live stream are dropped here; they remain
 // durable in Kafka and are served on replay via the replay endpoint.
 type Dispatcher struct {
-	mu       sync.RWMutex
-	streams  map[string]*Stream
-	buffer   int
+	mu      sync.RWMutex
+	streams map[string]*Stream
+	buffer  int
 }
 
 // NewDispatcher creates a dispatcher with a per-stream buffer size.
