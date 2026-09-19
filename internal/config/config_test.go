@@ -8,7 +8,7 @@ import (
 
 func TestDefault(t *testing.T) {
 	cfg := Default()
-	
+
 	if cfg.HTTPAddr != ":8080" {
 		t.Errorf("HTTPAddr = %q", cfg.HTTPAddr)
 	}
@@ -28,12 +28,12 @@ func TestLoadFromEnv(t *testing.T) {
 		os.Setenv("HTTP_ADDR", oldAddr)
 		os.Setenv("API_KEYS", oldKeys)
 	}()
-	
+
 	os.Setenv("HTTP_ADDR", ":9090")
 	os.Setenv("API_KEYS", "key1,key2,key3")
-	
+
 	cfg := Load()
-	
+
 	if cfg.HTTPAddr != ":9090" {
 		t.Errorf("HTTPAddr = %q, want :9090", cfg.HTTPAddr)
 	}
@@ -48,10 +48,10 @@ func TestLoadFromEnv(t *testing.T) {
 func TestLoadDurations(t *testing.T) {
 	old := os.Getenv("HEAVY_LLM_TIMEOUT")
 	defer os.Setenv("HEAVY_LLM_TIMEOUT", old)
-	
+
 	os.Setenv("HEAVY_LLM_TIMEOUT", "30m")
 	cfg := Load()
-	
+
 	if cfg.HeavyTimeout != 30*time.Minute {
 		t.Errorf("HeavyTimeout = %v, want 30m", cfg.HeavyTimeout)
 	}
@@ -60,10 +60,10 @@ func TestLoadDurations(t *testing.T) {
 func TestLoadIntegers(t *testing.T) {
 	old := os.Getenv("HEAVY_WORKERS")
 	defer os.Setenv("HEAVY_WORKERS", old)
-	
+
 	os.Setenv("HEAVY_WORKERS", "10")
 	cfg := Load()
-	
+
 	if cfg.HeavyWorkers != 10 {
 		t.Errorf("HeavyWorkers = %d, want 10", cfg.HeavyWorkers)
 	}
@@ -72,10 +72,10 @@ func TestLoadIntegers(t *testing.T) {
 func TestLoadBooleans(t *testing.T) {
 	old := os.Getenv("KAFKA_AUTO_CREATE")
 	defer os.Setenv("KAFKA_AUTO_CREATE", old)
-	
+
 	os.Setenv("KAFKA_AUTO_CREATE", "false")
 	cfg := Load()
-	
+
 	if cfg.KafkaAutoCreate != false {
 		t.Errorf("KafkaAutoCreate = %v, want false", cfg.KafkaAutoCreate)
 	}

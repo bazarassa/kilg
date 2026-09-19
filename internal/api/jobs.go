@@ -123,7 +123,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "job not found")
 		return
 	}
-	
+
 	// Only cancel queued/running jobs
 	if j.Status != protocol.StatusQueued && j.Status != protocol.StatusRunning {
 		writeJSONError(w, http.StatusConflict, "job already completed or failed")

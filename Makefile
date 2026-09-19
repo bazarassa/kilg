@@ -93,10 +93,12 @@ swagger: docs
 	@echo "Serving Swagger UI on http://REDACTED:8081/swagger/"
 	@docker run --rm -p 8081:8080 -e SWAGGER_JSON=/docs/swagger.json -v $(PWD)/docs:/docs swaggerapi/swagger-ui
 
+#ТЕСТЫ коротко
 .PHONY: test
 test:   ## Run fast tests
 	go test -timeout 30s ./...
 
+#ТЕСТЫ полностью
 .PHONY: test-race
 test-race: ## Run race tests
 	@echo "Running tests..."
