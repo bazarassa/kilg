@@ -17,8 +17,8 @@ import (
 
 // Client is the Ollama provider.
 type Client struct {
-	cfg    config.Config
-	http   *http.Client
+	cfg  config.Config
+	http *http.Client
 }
 
 // New builds the Ollama provider client.
@@ -59,10 +59,10 @@ type Embedding struct {
 
 // EmbeddingsResponse is the OpenAI-compatible embeddings response.
 type EmbeddingsResponse struct {
-	Object  string      `json:"object"`
-	Data    []Embedding `json:"data"`
-	Model   string      `json:"model"`
-	Usage   *struct {
+	Object string      `json:"object"`
+	Data   []Embedding `json:"data"`
+	Model  string      `json:"model"`
+	Usage  *struct {
 		PromptTokens int `json:"prompt_tokens"`
 		TotalTokens  int `json:"total_tokens"`
 	} `json:"usage,omitempty"`

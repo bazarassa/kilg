@@ -18,9 +18,9 @@ import (
 
 // OpenAIConfig configures an OpenAI-compatible provider.
 type OpenAIConfig struct {
-	BaseURL   string
-	Model     string
-	APIKey    string
+	BaseURL string
+	Model   string
+	APIKey  string
 	// ConnectTimeout bounds TCP connect + TLS handshake.
 	ConnectTimeout time.Duration
 	// HeaderTimeout bounds waiting for the response headers.
@@ -34,7 +34,7 @@ type OpenAIConfig struct {
 // OpenAIClient is a streaming client for OpenAI-compatible endpoints
 // (llama.cpp, LiteLLM, Ollama's OpenAI route).
 type OpenAIClient struct {
-	cfg OpenAIConfig
+	cfg  OpenAIConfig
 	http *http.Client
 }
 
@@ -239,13 +239,13 @@ func ParseChunk(raw string) ChunkInfo {
 	var obj struct {
 		Choices []struct {
 			Delta struct {
-				Content      string          `json:"content"`
-				Reasoning    string          `json:"reasoning_content"`
-				ReasoningTxt string          `json:"reasoning"`
-			} `json:"delta"`
-			Message struct {
 				Content      string `json:"content"`
 				Reasoning    string `json:"reasoning_content"`
+				ReasoningTxt string `json:"reasoning"`
+			} `json:"delta"`
+			Message struct {
+				Content   string `json:"content"`
+				Reasoning string `json:"reasoning_content"`
 			} `json:"message"`
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
