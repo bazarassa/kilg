@@ -75,17 +75,49 @@ func (s *Server) SetMetricsHandler(h http.Handler) { s.metricsHandler = h }
 // Handler builds the HTTP mux.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+
+	// Chat Completions
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChat)
+	mux.HandleFunc("GET /v1/chat/completions/{id}", s.handleGetCompletion)
+	mux.HandleFunc("DELETE /v1/chat/completions/{id}", s.handleCancelCompletion)
+	mux.HandleFunc("GET /v1/chat/completions/{id}/messages", s.handleGetCompletionMessages)
+
+	// Models
 	mux.HandleFunc("GET /v1/models", s.handleModels)
+	mux.HandleFunc("GET /v1/models/{id}", s.handleGetModel)
+
+	// Health & Metrics
 	mux.HandleFunc("GET /v1/health", s.handleHealth)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /ready", s.handleReady)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
+
+	// Jobs (async)
 	mux.HandleFunc("GET /v1/jobs", s.handleJobsList)
 	mux.HandleFunc("GET /v1/jobs/{id}", s.handleJob)
 	mux.HandleFunc("GET /v1/jobs/{id}/events", s.handleJobEvents)
+	mux.HandleFunc("DELETE /v1/jobs/{id}", s.handleCancelJob)
+
+	// Embeddings
 	mux.HandleFunc("POST /v1/embeddings", s.handleEmbeddings)
-	mux.HandleFunc("GET /metrics", s.handleMetrics)
-	return withAuth(s.cfg, withLogging(s.log, mux))
+
+	return withAuth(s.cfg, withLogging(s.log, withCORS(mux)))
+}
+
+// withCORS adds CORS headers for browser clients
+func withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Idempotency-Key, Last-Event-ID, Prefer")
+
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withLogging adds request logging.
@@ -93,7 +125,11 @@ func withLogging(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		next.ServeHTTP(w, r)
-		log.Debug("http", "method", r.Method, "path", r.URL.Path, "dur", time.Since(start).String())
+		log.Debug("http",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"dur", time.Since(start).String(),
+		)
 	})
 }
 
@@ -108,7 +144,7 @@ func withAuth(cfg config.Config, next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Health/metrics endpoints are open.
-		if r.URL.Path == "/health" || r.URL.Path == "/ready" || r.URL.Path == "/metrics" || r.URL.Path == "/v1/health" {
+		if isPublicEndpoint(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -122,6 +158,16 @@ func withAuth(cfg config.Config, next http.Handler) http.Handler {
 	})
 }
 
+func isPublicEndpoint(path string) bool {
+	publicPaths := []string{"/health", "/ready", "/metrics", "/v1/health"}
+	for _, p := range publicPaths {
+		if path == p {
+			return true
+		}
+	}
+	return false
+}
+
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -130,6 +176,10 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 
 func writeJSONError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]any{
-		"error": map[string]any{"message": msg, "type": "invalid_request_error", "code": code},
+		"error": map[string]any{
+			"message": msg,
+			"type":    "invalid_request_error",
+			"code":    code,
+		},
 	})
 }

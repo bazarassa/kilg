@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/kafka-llm-gateway/gateway/internal/jobs"
@@ -14,6 +15,23 @@ import (
 )
 
 // handleChat implements POST /v1/chat/completions.
+//
+// @Summary Create chat completion
+// @Description Creates a chat completion. Supports streaming, async mode, and idempotency.
+// @Tags chat
+// @Accept json
+// @Produce json
+// @Produce text/event-stream
+// @Param request body protocol.ChatRequest true "Chat completion request"
+// @Param Prefer header string false "Set to 'respond-async' for async job mode"
+// @Param Idempotency-Key header string false "Idempotency key to prevent duplicate requests"
+// @Success 200 {object} protocol.ChatResponse "Synchronous completion"
+// @Success 202 {object} protocol.JobAccepted "Async job accepted"
+// @Failure 400 {object} map[string]any "Bad request"
+// @Failure 401 {object} map[string]any "Unauthorized"
+// @Failure 503 {object} map[string]any "Service unavailable"
+// @Security BearerAuth
+// @Router /chat/completions [post]
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var req protocol.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -24,6 +42,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "messages is required")
 		return
 	}
+
+	// Fix for test ( Валидация ПЕРЕД любой другой логикой - когда модель не указана, код всё равно пытается запустить стриминг. Нужно добавить валидацию ДО попытки стриминга)
+	if len(req.Messages) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "messages is required")
+		return
+	}
+
+	// Если ты хочешь разрешить запросы без model, тогда это должно быть явной политикой сервера - он должен определять модель по умолчанию DefaultModel на основании кофига "model": "heavy"
+	if req.Model == "" {
+		req.Model = s.cfg.DefaultModel
+	}
+
+	req.Model = strings.TrimSpace(req.Model)
+
 	if req.Model == "" {
 		writeJSONError(w, http.StatusBadRequest, "model is required")
 		return
@@ -66,8 +98,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Non-async heavy route: enqueue (durable) then stream the response.
-	// Register the stream BEFORE enqueuing so no early event (e.g. "started")
-	// is lost to the dispatcher.
 	if route.Async {
 		stream := s.dispatch.Register(requestID)
 		if !reused {
@@ -85,6 +115,52 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	s.streamDirect(w, r, requestID, route, req, rawBody)
 }
 
+// handleGetCompletion implements GET /v1/chat/completions/{id}.
+//
+// @Summary Get completion by ID
+// @Description Retrieves a chat completion job by ID (alias for GET /v1/jobs/{id})
+// @Tags chat
+// @Produce json
+// @Param id path string true "Completion ID"
+// @Success 200 {object} protocol.JobInfo
+// @Failure 404 {object} map[string]any
+// @Security BearerAuth
+// @Router /chat/completions/{id} [get]
+func (s *Server) handleGetCompletion(w http.ResponseWriter, r *http.Request) {
+	s.handleJob(w, r)
+}
+
+// handleCancelCompletion implements DELETE /v1/chat/completions/{id}.
+//
+// @Summary Cancel completion
+// @Description Cancels a running or queued chat completion
+// @Tags chat
+// @Produce json
+// @Param id path string true "Completion ID"
+// @Success 200 {object} map[string]string
+// @Failure 404 {object} map[string]any
+// @Security BearerAuth
+// @Router /chat/completions/{id} [delete]
+func (s *Server) handleCancelCompletion(w http.ResponseWriter, r *http.Request) {
+	s.handleCancelJob(w, r)
+}
+
+// handleGetCompletionMessages implements GET /v1/chat/completions/{id}/messages.
+//
+// @Summary Get completion messages
+// @Description Streams all events/messages for a completion (alias for GET /v1/jobs/{id}/events)
+// @Tags chat
+// @Produce text/event-stream
+// @Param id path string true "Completion ID"
+// @Param Last-Event-ID header string false "Resume from this event ID"
+// @Success 200 {string} string "SSE stream"
+// @Failure 404 {object} map[string]any
+// @Security BearerAuth
+// @Router /chat/completions/{id}/messages [get]
+func (s *Server) handleGetCompletionMessages(w http.ResponseWriter, r *http.Request) {
+	s.handleJobEvents(w, r)
+}
+
 func keyOf(r *http.Request) string { return r.Header.Get("Idempotency-Key") }
 
 // isAsync reports whether the client requested async mode.
@@ -98,20 +174,46 @@ func isAsync(r *http.Request) bool {
 	return false
 }
 
+//func splitComma(s string) []string {
+//	var out []string
+//	cur := ""
+//	for _, c := range s {
+//		if c == ',' {
+//			out = append(out, trimSpace(cur))
+//			cur = ""
+//			continue
+//		}
+//		cur += string(c)
+//	}
+//	if cur != "" {
+//		out = append(out, trimSpace(cur))
+//	}
+//	return out
+//}
+
 func splitComma(s string) []string {
 	var out []string
 	cur := ""
+
+	appendCurrent := func() {
+		value := trimSpace(cur)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+
 	for _, c := range s {
 		if c == ',' {
-			out = append(out, trimSpace(cur))
+			appendCurrent()
 			cur = ""
 			continue
 		}
+
 		cur += string(c)
 	}
-	if cur != "" {
-		out = append(out, trimSpace(cur))
-	}
+
+	appendCurrent()
+
 	return out
 }
 
@@ -149,7 +251,7 @@ func (s *Server) enqueue(ctx context.Context, requestID string, route router.Rou
 		return err
 	}
 
-	// Publish the queued event so the event log is complete from the start.
+	// Publish the queued event.
 	ev, err := protocol.NewEvent(requestID, 0, protocol.TypeQueued, map[string]string{
 		"provider": route.Provider,
 		"model":    route.Model,
@@ -166,8 +268,7 @@ func (s *Server) enqueue(ctx context.Context, requestID string, route router.Rou
 	return nil
 }
 
-// streamJob streams a Kafka-backed job to the client as SSE, registering a
-// fresh stream.
+// streamJob streams a Kafka-backed job to the client as SSE.
 func (s *Server) streamJob(w http.ResponseWriter, r *http.Request, requestID string) {
 	stream := s.dispatch.Register(requestID)
 	s.streamJobWith(w, r, requestID, stream)
@@ -187,9 +288,6 @@ func (s *Server) streamJobWith(w http.ResponseWriter, r *http.Request, requestID
 
 	defer s.dispatch.Unregister(requestID)
 
-	// Only replay when the client reconnects with a Last-Event-ID. A fresh
-	// request starts from the live stream (the worker publishes a "started"
-	// event immediately, so nothing is lost).
 	lastSent := uint64(0)
 	if lastID := r.Header.Get("Last-Event-ID"); lastID != "" {
 		s.metrics.Reconnects.Inc()
@@ -216,7 +314,6 @@ func (s *Server) streamJobWith(w http.ResponseWriter, r *http.Request, requestID
 			if !ok {
 				return
 			}
-			// Skip events already delivered by the replay above.
 			if ev.Sequence <= lastSent {
 				continue
 			}

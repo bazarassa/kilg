@@ -1,4 +1,23 @@
 // Command gateway runs the OpenAI-compatible LLM gateway.
+//
+// @title LLM Gateway API
+// @version 1.0
+// @description OpenAI-compatible LLM Gateway with Kafka-backed durable execution
+// @termsOfService http://swagger.io/terms/
+//
+// @contact.name API Support
+// @contact.email support@example.com
+//
+// @license.name Apache 2.0
+// @license.url http://www.apache.org/licenses/LICENSE-2.0.html
+//
+// @host REDACTED:8080
+// @BasePath /v1
+//
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Authorization
+// @description Type "Bearer" followed by a space and your API key.
 package main
 
 import (
@@ -108,3 +127,4 @@ func main() {
 func ensureTopics(cfg config.Config, topics kafka.Topics) error {
 	return kafka.EnsureTopicsWithRewrite(context.Background(), cfg.KafkaBrokers, topics, cfg.KafkaPartitions, cfg.KafkaReplication, cfg.KafkaAddressRewrite)
 }
+
