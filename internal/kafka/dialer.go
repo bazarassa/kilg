@@ -14,8 +14,8 @@ import (
 // addresses. This handles the common case where a broker advertises an
 // internal address/port that is not reachable from the client network.
 type rewriteDialer struct {
-	inner  *net.Dialer
-	rules  map[string]string // advertised -> actual
+	inner *net.Dialer
+	rules map[string]string // advertised -> actual
 }
 
 // NewRewriteDialer builds a dialer from a comma-separated list of

@@ -186,7 +186,7 @@ type sessionHandler struct {
 	handler func(sarama.ConsumerGroupSession, *sarama.ConsumerMessage) error
 }
 
-func (h *sessionHandler) Setup(sarama.ConsumerGroupSession) error    { return nil }
+func (h *sessionHandler) Setup(sarama.ConsumerGroupSession) error   { return nil }
 func (h *sessionHandler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 func (h *sessionHandler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for {
