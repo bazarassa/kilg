@@ -8,6 +8,18 @@ import (
 )
 
 // handleEmbeddings implements POST /v1/embeddings.
+//
+// @Summary Create embeddings
+// @Description Creates embedding vectors for input text(s) using Ollama
+// @Tags embeddings
+// @Accept json
+// @Produce json
+// @Param request body object true "Embeddings request with input and optional model"
+// @Success 200 {object} ollama.EmbeddingsResponse
+// @Failure 400 {object} map[string]any
+// @Failure 502 {object} map[string]any
+// @Security BearerAuth
+// @Router /embeddings [post]
 func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	prov, ok := s.providers["ollama"]
 	if !ok {
@@ -21,8 +33,8 @@ func (s *Server) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Model   string   `json:"model"`
-		Input   json.RawMessage `json:"input"`
+		Model string          `json:"model"`
+		Input json.RawMessage `json:"input"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
