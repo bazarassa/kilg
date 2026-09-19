@@ -127,4 +127,3 @@ func main() {
 func ensureTopics(cfg config.Config, topics kafka.Topics) error {
 	return kafka.EnsureTopicsWithRewrite(context.Background(), cfg.KafkaBrokers, topics, cfg.KafkaPartitions, cfg.KafkaReplication, cfg.KafkaAddressRewrite)
 }
-

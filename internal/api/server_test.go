@@ -26,8 +26,8 @@ import (
 func newTestServer(t *testing.T) (*Server, *kafka.FakeProducer, *kafka.FakeReader) {
 	t.Helper()
 	cfg := config.Default()
-        //FIX test 
-        cfg.DefaultModel = "heavy"               
+	//FIX test
+	cfg.DefaultModel = "heavy"
 	prod := kafka.NewFakeProducer()
 	reader := kafka.NewFakeReader()
 	topics := kafka.Topics{
@@ -63,20 +63,20 @@ func TestModelsEndpoint(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	rec := httptest.NewRecorder()
-	
+
 	done := make(chan bool)
 	go func() {
 		srv.Handler().ServeHTTP(rec, req)
 		done <- true
 	}()
-	
+
 	select {
 	case <-done:
 		// OK
 	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout")
 	}
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -93,20 +93,20 @@ func TestGetModel(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/v1/models/heavy", nil)
 	rec := httptest.NewRecorder()
-	
+
 	done := make(chan bool)
 	go func() {
 		srv.Handler().ServeHTTP(rec, req)
 		done <- true
 	}()
-	
+
 	select {
 	case <-done:
 		// OK
 	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout")
 	}
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -215,20 +215,20 @@ func TestChatAsyncEnqueues(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Prefer", "respond-async")
 	rec := httptest.NewRecorder()
-	
+
 	done := make(chan bool)
 	go func() {
 		srv.Handler().ServeHTTP(rec, req)
 		done <- true
 	}()
-	
+
 	select {
 	case <-done:
 		// OK
 	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout")
 	}
-	
+
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want 202, body = %s", rec.Code, rec.Body.String())
 	}
@@ -292,29 +292,29 @@ func TestJobEventsReplay(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/jobs/REQX/events", nil)
 	rec := httptest.NewRecorder()
-	
+
 	done := make(chan bool)
 	go func() {
 		srv.Handler().ServeHTTP(rec, req)
 		done <- true
 	}()
-	
+
 	select {
 	case <-done:
 		// OK
 	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout - SSE stream didn't complete")
 	}
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	
+
 	contentType := rec.Header().Get("Content-Type")
 	if contentType != "text/event-stream" {
 		t.Errorf("content-type = %q, want text/event-stream", contentType)
 	}
-	
+
 	body := rec.Body.String()
 	if !strings.Contains(body, "c1") || !strings.Contains(body, "c3") {
 		t.Errorf("replay missing events, body = %q", body)
@@ -326,23 +326,23 @@ func TestJobEventsReplay(t *testing.T) {
 
 func TestJobsList(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	srv.jobs.Ensure("job1", "heavy", "model1")
 	srv.jobs.Ensure("job2", "litellm", "model2")
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/jobs", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	
+
 	var resp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	
+
 	if resp["object"] != "list" {
 		t.Errorf("object = %q, want list", resp["object"])
 	}
@@ -350,25 +350,25 @@ func TestJobsList(t *testing.T) {
 
 func TestJobGet(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	srv.jobs.Ensure("testjob", "heavy", "testmodel")
 	srv.jobs.Update("testjob", func(j *jobs.Job) {
 		j.Status = protocol.StatusRunning
 	})
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/jobs/testjob", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	
+
 	var jobInfo protocol.JobInfo
 	if err := json.Unmarshal(rec.Body.Bytes(), &jobInfo); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	
+
 	if jobInfo.ID != "testjob" {
 		t.Errorf("job.ID = %q, want testjob", jobInfo.ID)
 	}
@@ -389,29 +389,29 @@ func TestJobNotFound(t *testing.T) {
 
 func TestCancelJob(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	srv.jobs.Ensure("canceljob", "heavy", "testmodel")
 	srv.jobs.Update("canceljob", func(j *jobs.Job) {
 		j.Status = protocol.StatusQueued
 	})
-	
+
 	req := httptest.NewRequest(http.MethodDelete, "/v1/jobs/canceljob", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
-	
+
 	var resp map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	
+
 	if resp["status"] != protocol.StatusCancelled {
 		t.Errorf("status = %q, want cancelled", resp["status"])
 	}
-	
+
 	j, ok := srv.jobs.Store().Get("canceljob")
 	if !ok {
 		t.Fatal("job not found after cancel")
@@ -423,16 +423,16 @@ func TestCancelJob(t *testing.T) {
 
 func TestCancelCompletedJob(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	srv.jobs.Ensure("completedjob", "heavy", "testmodel")
 	srv.jobs.Update("completedjob", func(j *jobs.Job) {
 		j.Status = protocol.StatusCompleted
 	})
-	
+
 	req := httptest.NewRequest(http.MethodDelete, "/v1/jobs/completedjob", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409, body = %s", rec.Code, rec.Body.String())
 	}
@@ -481,7 +481,7 @@ func TestAuthPublicEndpoints(t *testing.T) {
 	srv := NewServer(cfg, prod, topics, rt, jm, dispatch, reader, metrics, testLogger(), nil)
 
 	publicEndpoints := []string{"/health", "/ready", "/metrics", "/v1/health"}
-	
+
 	for _, endpoint := range publicEndpoints {
 		t.Run(endpoint, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, endpoint, nil)
@@ -496,15 +496,15 @@ func TestAuthPublicEndpoints(t *testing.T) {
 
 func TestCORS(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	req := httptest.NewRequest(http.MethodOptions, "/v1/models", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("OPTIONS status = %d, want 204", rec.Code)
 	}
-	
+
 	if rec.Header().Get("Access-Control-Allow-Origin") != "*" {
 		t.Errorf("CORS origin header missing")
 	}
@@ -533,25 +533,25 @@ func TestParseSequence(t *testing.T) {
 
 func TestChatCompletionAlias(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	srv.jobs.Ensure("testcompletion", "heavy", "testmodel")
 	srv.jobs.Update("testcompletion", func(j *jobs.Job) {
 		j.Status = protocol.StatusCompleted
 	})
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions/testcompletion", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	
+
 	var jobInfo protocol.JobInfo
 	if err := json.Unmarshal(rec.Body.Bytes(), &jobInfo); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	
+
 	if jobInfo.Status != protocol.StatusCompleted {
 		t.Errorf("status = %q, want completed", jobInfo.Status)
 	}
@@ -559,16 +559,16 @@ func TestChatCompletionAlias(t *testing.T) {
 
 func TestCancelCompletionAlias(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	srv.jobs.Ensure("cancelcomp", "heavy", "testmodel")
 	srv.jobs.Update("cancelcomp", func(j *jobs.Job) {
 		j.Status = protocol.StatusQueued
 	})
-	
+
 	req := httptest.NewRequest(http.MethodDelete, "/v1/chat/completions/cancelcomp", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
@@ -576,29 +576,29 @@ func TestCancelCompletionAlias(t *testing.T) {
 
 func TestCompletionMessagesAlias(t *testing.T) {
 	srv, _, reader := newTestServer(t)
-	
+
 	recs := []kafka.Record{}
-	ev, _ := protocol.NewEvent("MSG1", 1, protocol.TypeRawSSE, 
+	ev, _ := protocol.NewEvent("MSG1", 1, protocol.TypeRawSSE,
 		protocol.RawSSEPayload{Data: `{"choices":[{"delta":{"content":"hi"}}]}`})
 	b, _ := json.Marshal(ev)
 	recs = append(recs, kafka.Record{Key: []byte("MSG1"), Value: b})
 	reader.SetRecords("MSG1", recs)
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/chat/completions/MSG1/messages", nil)
 	rec := httptest.NewRecorder()
-	
+
 	done := make(chan bool)
 	go func() {
 		srv.Handler().ServeHTTP(rec, req)
 		done <- true
 	}()
-	
+
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout")
 	}
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
@@ -606,32 +606,32 @@ func TestCompletionMessagesAlias(t *testing.T) {
 
 func TestReplayFromWithLastEventID(t *testing.T) {
 	srv, _, reader := newTestServer(t)
-	
+
 	recs := []kafka.Record{}
 	for i := uint64(1); i <= 5; i++ {
-		ev, _ := protocol.NewEvent("REPLAY1", i, protocol.TypeRawSSE, 
+		ev, _ := protocol.NewEvent("REPLAY1", i, protocol.TypeRawSSE,
 			protocol.RawSSEPayload{Data: `{"seq":` + itoa(i) + `}`})
 		b, _ := json.Marshal(ev)
 		recs = append(recs, kafka.Record{Key: []byte("REPLAY1"), Value: b})
 	}
 	reader.SetRecords("REPLAY1", recs)
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/jobs/REPLAY1/events", nil)
 	req.Header.Set("Last-Event-ID", "REPLAY1-0000000002")
 	rec := httptest.NewRecorder()
-	
+
 	done := make(chan bool)
 	go func() {
 		srv.Handler().ServeHTTP(rec, req)
 		done <- true
 	}()
-	
+
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("test timeout")
 	}
-	
+
 	body := rec.Body.String()
 	if strings.Contains(body, `"seq":1`) || strings.Contains(body, `"seq":2`) {
 		t.Errorf("replay included already-sent events")
@@ -643,9 +643,9 @@ func TestReplayFromWithLastEventID(t *testing.T) {
 
 func TestJobRecoveryFromKafka(t *testing.T) {
 	srv, _, reader := newTestServer(t)
-	
+
 	recs := []kafka.Record{}
-	
+
 	ev1, _ := protocol.NewEvent("RECOVER1", 0, protocol.TypeQueued, map[string]string{
 		"provider": "heavy", "model": "test",
 	})
@@ -653,41 +653,41 @@ func TestJobRecoveryFromKafka(t *testing.T) {
 	ev1.Model = "test"
 	b1, _ := json.Marshal(ev1)
 	recs = append(recs, kafka.Record{Key: []byte("RECOVER1"), Value: b1})
-	
-	ev2, _ := protocol.NewEvent("RECOVER1", 1, protocol.TypeStarted, 
+
+	ev2, _ := protocol.NewEvent("RECOVER1", 1, protocol.TypeStarted,
 		protocol.StartedPayload{Provider: "heavy", Model: "test"})
 	ev2.Provider = "heavy"
 	ev2.Model = "test"
 	b2, _ := json.Marshal(ev2)
 	recs = append(recs, kafka.Record{Key: []byte("RECOVER1"), Value: b2})
-	
-	ev3, _ := protocol.NewEvent("RECOVER1", 2, protocol.TypeCompleted, 
+
+	ev3, _ := protocol.NewEvent("RECOVER1", 2, protocol.TypeCompleted,
 		protocol.CompletedPayload{FinishReason: "stop", Events: 2})
 	ev3.Provider = "heavy"
 	ev3.Model = "test"
 	b3, _ := json.Marshal(ev3)
 	recs = append(recs, kafka.Record{Key: []byte("RECOVER1"), Value: b3})
-	
+
 	reader.SetRecords("RECOVER1", recs)
-	
+
 	_, ok := srv.jobs.Store().Get("RECOVER1")
 	if ok {
 		t.Fatal("job should not exist yet")
 	}
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/v1/jobs/RECOVER1", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	
+
 	var jobInfo protocol.JobInfo
 	if err := json.Unmarshal(rec.Body.Bytes(), &jobInfo); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	
+
 	if jobInfo.Status != protocol.StatusCompleted {
 		t.Errorf("status = %q, want completed", jobInfo.Status)
 	}
@@ -698,29 +698,29 @@ func TestJobRecoveryFromKafka(t *testing.T) {
 
 func TestIdempotencyKeyReuse(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	body := `{"model":"heavy","messages":[{"role":"user","content":"test"}]}`
-	
+
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	req1.Header.Set("Content-Type", "application/json")
 	req1.Header.Set("Prefer", "respond-async")
 	req1.Header.Set("Idempotency-Key", "unique-key-123")
 	rec1 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec1, req1)
-	
+
 	var resp1 protocol.JobAccepted
 	json.Unmarshal(rec1.Body.Bytes(), &resp1)
-	
+
 	req2 := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("Prefer", "respond-async")
 	req2.Header.Set("Idempotency-Key", "unique-key-123")
 	rec2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec2, req2)
-	
+
 	var resp2 protocol.JobAccepted
 	json.Unmarshal(rec2.Body.Bytes(), &resp2)
-	
+
 	if resp1.ID != resp2.ID {
 		t.Errorf("different IDs for same idempotency key: %s vs %s", resp1.ID, resp2.ID)
 	}
@@ -729,21 +729,21 @@ func TestIdempotencyKeyReuse(t *testing.T) {
 func TestWriteJSONError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeJSONError(rec, http.StatusBadRequest, "test error message")
-	
+
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
 	}
-	
+
 	var errResp map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	
+
 	errObj, ok := errResp["error"].(map[string]any)
 	if !ok {
 		t.Fatal("missing error object")
 	}
-	
+
 	if errObj["message"] != "test error message" {
 		t.Errorf("message = %q", errObj["message"])
 	}
@@ -821,7 +821,7 @@ func TestTrimSpaceHelper(t *testing.T) {
 		{"  ", ""},
 		{"", ""},
 	}
-	
+
 	for _, tt := range tests {
 		got := trimSpace(tt.input)
 		if got != tt.want {
@@ -841,7 +841,7 @@ func TestIsAsyncHeader(t *testing.T) {
 		{"", false},
 		{"other", false},
 	}
-	
+
 	for _, tt := range tests {
 		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		req.Header.Set("Prefer", tt.header)
@@ -854,19 +854,19 @@ func TestIsAsyncHeader(t *testing.T) {
 
 func TestMetricsEndpoint(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	srv.SetMetricsHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("# HELP test"))
 	}))
-	
+
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
-	
+
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	
+
 	if !strings.Contains(rec.Body.String(), "# HELP test") {
 		t.Errorf("metrics response = %q", rec.Body.String())
 	}
@@ -888,9 +888,9 @@ func TestJobInfoConversion(t *testing.T) {
 		FinishReason: "stop",
 		Error:        "",
 	}
-	
+
 	info := jobInfo(job)
-	
+
 	if info.ID != "test123" {
 		t.Errorf("ID = %q", info.ID)
 	}
@@ -904,7 +904,7 @@ func TestJobInfoConversion(t *testing.T) {
 
 func TestWriteEventTypes(t *testing.T) {
 	srv, _, _ := newTestServer(t)
-	
+
 	tests := []struct {
 		name      string
 		eventType string
@@ -931,17 +931,17 @@ func TestWriteEventTypes(t *testing.T) {
 			protocol.HeartbeatPayload{LastSequence: 5},
 		},
 	}
-	
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ev, err := protocol.NewEvent("TEST", 1, tt.eventType, tt.payload)
 			if err != nil {
 				t.Fatalf("NewEvent: %v", err)
 			}
-			
+
 			rec := httptest.NewRecorder()
 			flusher := &testFlusher{rec}
-			
+
 			if err := srv.writeEvent(rec, flusher, ev); err != nil {
 				t.Fatalf("writeEvent: %v", err)
 			}
@@ -950,14 +950,14 @@ func TestWriteEventTypes(t *testing.T) {
 }
 
 func TestTerminalChunkFormatting(t *testing.T) {
-	ev1, _ := protocol.NewEvent("REQ1", 1, protocol.TypeCompleted, 
+	ev1, _ := protocol.NewEvent("REQ1", 1, protocol.TypeCompleted,
 		protocol.CompletedPayload{FinishReason: "length"})
 	chunk1 := terminalChunk(ev1)
 	if !strings.Contains(chunk1, `"finish_reason":"length"`) {
 		t.Errorf("completed chunk = %q", chunk1)
 	}
-	
-	ev2, _ := protocol.NewEvent("REQ2", 1, protocol.TypeFailed, 
+
+	ev2, _ := protocol.NewEvent("REQ2", 1, protocol.TypeFailed,
 		protocol.FailedPayload{Error: "timeout"})
 	chunk2 := terminalChunk(ev2)
 	if !strings.Contains(chunk2, "timeout") {
@@ -968,7 +968,7 @@ func TestTerminalChunkFormatting(t *testing.T) {
 func TestMetaChunkFormatting(t *testing.T) {
 	ev, _ := protocol.NewEvent("REQ1", 42, protocol.TypeHeartbeat, nil)
 	chunk := metaChunk(ev)
-	
+
 	if !strings.Contains(chunk, `"type":"heartbeat"`) {
 		t.Errorf("missing type in chunk: %q", chunk)
 	}
@@ -986,7 +986,7 @@ func TestJSONEscape(t *testing.T) {
 		{`line1\nline2`, `line1\\nline2`},
 		{`simple`, `simple`},
 	}
-	
+
 	for _, tt := range tests {
 		got := jsonEscape(tt.input)
 		if got != tt.want {
@@ -1005,7 +1005,7 @@ func TestItoaHelper(t *testing.T) {
 		{12345, "12345"},
 		{9223372036854775807, "9223372036854775807"},
 	}
-	
+
 	for _, tt := range tests {
 		got := itoa(tt.input)
 		if got != tt.want {
