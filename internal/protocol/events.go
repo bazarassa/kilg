@@ -10,27 +10,27 @@ import (
 
 // Event types carried on the llm.events topic.
 const (
-	TypeQueued      = "queued"
-	TypeStarted     = "started"
-	TypeReasoning   = "reasoning"
-	TypeContent     = "content"
-	TypeToolCall    = "tool_call"
-	TypeUsage       = "usage"
-	TypeHeartbeat   = "heartbeat"
-	TypeCompleted   = "completed"
-	TypeFailed      = "failed"
-	TypeCancelled   = "cancelled"
-	TypeRawSSE      = "raw_sse"
-	TypeUnknown     = "unknown"
+	TypeQueued    = "queued"
+	TypeStarted   = "started"
+	TypeReasoning = "reasoning"
+	TypeContent   = "content"
+	TypeToolCall  = "tool_call"
+	TypeUsage     = "usage"
+	TypeHeartbeat = "heartbeat"
+	TypeCompleted = "completed"
+	TypeFailed    = "failed"
+	TypeCancelled = "cancelled"
+	TypeRawSSE    = "raw_sse"
+	TypeUnknown   = "unknown"
 )
 
 // Job statuses.
 const (
-	StatusQueued      = "queued"
-	StatusRunning     = "running"
-	StatusCompleted   = "completed"
-	StatusFailed      = "failed"
-	StatusCancelled   = "cancelled"
+	StatusQueued    = "queued"
+	StatusRunning   = "running"
+	StatusCompleted = "completed"
+	StatusFailed    = "failed"
+	StatusCancelled = "cancelled"
 )
 
 // Event is the envelope for every record published to llm.events.
@@ -61,20 +61,20 @@ type StartedPayload struct {
 
 // CompletedPayload is emitted after the final content event is durably stored.
 type CompletedPayload struct {
-	FinishReason string          `json:"finish_reason,omitempty"`
-	Usage        json.RawMessage `json:"usage,omitempty"`
-	Content      string          `json:"content,omitempty"`
-	Reasoning    string          `json:"reasoning,omitempty"`
-	ReasoningAvailable bool       `json:"reasoning_available"`
-	Events       uint64          `json:"events"`
-	DurationMS   int64           `json:"duration_ms"`
+	FinishReason       string          `json:"finish_reason,omitempty"`
+	Usage              json.RawMessage `json:"usage,omitempty"`
+	Content            string          `json:"content,omitempty"`
+	Reasoning          string          `json:"reasoning,omitempty"`
+	ReasoningAvailable bool            `json:"reasoning_available"`
+	Events             uint64          `json:"events"`
+	DurationMS         int64           `json:"duration_ms"`
 }
 
 // FailedPayload is emitted when a job cannot be completed.
 type FailedPayload struct {
-	Error   string `json:"error"`
-	Retryable bool `json:"retryable"`
-	Attempt int    `json:"attempt,omitempty"`
+	Error     string `json:"error"`
+	Retryable bool   `json:"retryable"`
+	Attempt   int    `json:"attempt,omitempty"`
 }
 
 // HeartbeatPayload is emitted periodically for long generations.
@@ -84,27 +84,27 @@ type HeartbeatPayload struct {
 
 // Request is the job record published to llm.requests.
 type Request struct {
-	RequestID  string          `json:"request_id"`
-	Provider   string          `json:"provider"`
-	Model      string          `json:"model"`
-	CreatedAt  time.Time       `json:"created_at"`
-	Attempt    int             `json:"attempt"`
-	IdempotencyKey string      `json:"idempotency_key,omitempty"`
-	Payload    json.RawMessage `json:"payload"`
+	RequestID      string          `json:"request_id"`
+	Provider       string          `json:"provider"`
+	Model          string          `json:"model"`
+	CreatedAt      time.Time       `json:"created_at"`
+	Attempt        int             `json:"attempt"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	Payload        json.RawMessage `json:"payload"`
 }
 
 // Completion is the aggregate result published to llm.completed.
 type Completion struct {
-	RequestID  string          `json:"request_id"`
-	Status     string          `json:"status"`
-	Provider   string          `json:"provider"`
-	Model      string          `json:"model"`
-	Reasoning  string          `json:"reasoning,omitempty"`
-	Content    string          `json:"content"`
-	Usage      json.RawMessage `json:"usage,omitempty"`
-	Events     uint64          `json:"events"`
-	StartedAt  time.Time       `json:"started_at,omitempty"`
-	CompletedAt time.Time      `json:"completed_at"`
+	RequestID   string          `json:"request_id"`
+	Status      string          `json:"status"`
+	Provider    string          `json:"provider"`
+	Model       string          `json:"model"`
+	Reasoning   string          `json:"reasoning,omitempty"`
+	Content     string          `json:"content"`
+	Usage       json.RawMessage `json:"usage,omitempty"`
+	Events      uint64          `json:"events"`
+	StartedAt   time.Time       `json:"started_at,omitempty"`
+	CompletedAt time.Time       `json:"completed_at"`
 }
 
 // Failure is the record published to llm.failed.

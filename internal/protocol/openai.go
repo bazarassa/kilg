@@ -5,9 +5,9 @@ import "encoding/json"
 // ChatMessage is an OpenAI-compatible chat message. Extra provider-specific
 // fields are preserved via Extra.
 type ChatMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content,omitempty"`
-	Name    string          `json:"name,omitempty"`
+	Role    string                     `json:"role"`
+	Content json.RawMessage            `json:"content,omitempty"`
+	Name    string                     `json:"name,omitempty"`
 	Extra   map[string]json.RawMessage `json:"-"`
 }
 
@@ -60,18 +60,18 @@ func (m ChatMessage) MarshalJSON() ([]byte, error) {
 // Unknown top-level fields are preserved in Extra so provider-specific
 // parameters are not lost when forwarding to upstream providers.
 type ChatRequest struct {
-	Model               string            `json:"model"`
-	Messages            []ChatMessage     `json:"messages"`
-	Stream              bool              `json:"stream,omitempty"`
-	Temperature         *float64          `json:"temperature,omitempty"`
-	TopP                *float64          `json:"top_p,omitempty"`
-	MaxTokens           *int              `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int              `json:"max_completion_tokens,omitempty"`
-	Stop                json.RawMessage   `json:"stop,omitempty"`
-	PresencePenalty     *float64          `json:"presence_penalty,omitempty"`
-	FrequencyPenalty    *float64          `json:"frequency_penalty,omitempty"`
-	ResponseFormat      json.RawMessage   `json:"response_format,omitempty"`
-	StreamOptions       json.RawMessage   `json:"stream_options,omitempty"`
+	Model               string                     `json:"model"`
+	Messages            []ChatMessage              `json:"messages"`
+	Stream              bool                       `json:"stream,omitempty"`
+	Temperature         *float64                   `json:"temperature,omitempty"`
+	TopP                *float64                   `json:"top_p,omitempty"`
+	MaxTokens           *int                       `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int                       `json:"max_completion_tokens,omitempty"`
+	Stop                json.RawMessage            `json:"stop,omitempty"`
+	PresencePenalty     *float64                   `json:"presence_penalty,omitempty"`
+	FrequencyPenalty    *float64                   `json:"frequency_penalty,omitempty"`
+	ResponseFormat      json.RawMessage            `json:"response_format,omitempty"`
+	StreamOptions       json.RawMessage            `json:"stream_options,omitempty"`
 	Extra               map[string]json.RawMessage `json:"-"`
 }
 
@@ -125,19 +125,19 @@ func (r ChatRequest) MarshalJSON() ([]byte, error) {
 
 // ChatResponse is a non-streaming OpenAI-compatible response.
 type ChatResponse struct {
-	ID                string   `json:"id"`
-	Object            string   `json:"object"`
-	Created           int64    `json:"created"`
-	Model             string   `json:"model"`
-	Choices           []Choice `json:"choices"`
-	Usage             *Usage   `json:"usage,omitempty"`
+	ID      string   `json:"id"`
+	Object  string   `json:"object"`
+	Created int64    `json:"created"`
+	Model   string   `json:"model"`
+	Choices []Choice `json:"choices"`
+	Usage   *Usage   `json:"usage,omitempty"`
 }
 
 // Choice is one completion choice.
 type Choice struct {
-	Index        int           `json:"index"`
-	Message      ChatMessage   `json:"message"`
-	FinishReason *string       `json:"finish_reason"`
+	Index        int         `json:"index"`
+	Message      ChatMessage `json:"message"`
+	FinishReason *string     `json:"finish_reason"`
 }
 
 // Usage reports token accounting.
@@ -149,19 +149,19 @@ type Usage struct {
 
 // ChatChunk is a streaming OpenAI-compatible chunk.
 type ChatChunk struct {
-	ID     string   `json:"id"`
-	Object string   `json:"object"`
-	Created int64   `json:"created"`
-	Model  string   `json:"model"`
+	ID      string        `json:"id"`
+	Object  string        `json:"object"`
+	Created int64         `json:"created"`
+	Model   string        `json:"model"`
 	Choices []ChunkChoice `json:"choices"`
-	Usage  *Usage `json:"usage,omitempty"`
+	Usage   *Usage        `json:"usage,omitempty"`
 }
 
 // ChunkChoice is a streaming choice with a delta.
 type ChunkChoice struct {
-	Index        int           `json:"index"`
-	Delta        ChatMessage   `json:"delta"`
-	FinishReason *string       `json:"finish_reason"`
+	Index        int         `json:"index"`
+	Delta        ChatMessage `json:"delta"`
+	FinishReason *string     `json:"finish_reason"`
 }
 
 // ModelInfo is an entry in /v1/models.
@@ -174,22 +174,22 @@ type ModelInfo struct {
 
 // ModelsList is the /v1/models response.
 type ModelsList struct {
-	Object  string      `json:"object"`
-	Data    []ModelInfo `json:"data"`
+	Object string      `json:"object"`
+	Data   []ModelInfo `json:"data"`
 }
 
 // JobInfo is the async job status response.
 type JobInfo struct {
-	ID         string `json:"id"`
-	Object     string `json:"object"`
-	Status     string `json:"status"`
-	Provider   string `json:"provider,omitempty"`
-	Model      string `json:"model,omitempty"`
-	Sequence   uint64 `json:"sequence"`
-	CreatedAt  string `json:"created_at,omitempty"`
-	UpdatedAt  string `json:"updated_at,omitempty"`
+	ID           string `json:"id"`
+	Object       string `json:"object"`
+	Status       string `json:"status"`
+	Provider     string `json:"provider,omitempty"`
+	Model        string `json:"model,omitempty"`
+	Sequence     uint64 `json:"sequence"`
+	CreatedAt    string `json:"created_at,omitempty"`
+	UpdatedAt    string `json:"updated_at,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
-	Error      string `json:"error,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 // JobAccepted is the response for async job creation.
