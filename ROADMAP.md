@@ -40,24 +40,24 @@
 * [x] Определена необходимость `acks=all`.
 * [x] Определено использование idempotent Kafka producer.
 
+### 1. Go Project Foundation
+
+* [x] Создать Go module.
+* [x] Создать `cmd/gateway`.
+* [x] Создать `cmd/worker`.
+* [x] Создать базовую структуру `internal/`.
+* [x] Реализовать configuration layer.
+* [x] Реализовать environment-based configuration.
+* [x] Реализовать `log/slog`.
+* [x] Реализовать graceful shutdown.
+* [x] Реализовать `/health`.
+* [x] Реализовать `/ready`.
+* [x] Добавить `go test ./...`.
+* [x] Добавить `go vet ./...`.
+
 ---
 
 ## В работе
-
-### 1. Go Project Foundation
-
-* [ ] Создать Go module.
-* [ ] Создать `cmd/gateway`.
-* [ ] Создать `cmd/worker`.
-* [ ] Создать базовую структуру `internal/`.
-* [ ] Реализовать configuration layer.
-* [ ] Реализовать environment-based configuration.
-* [ ] Реализовать `log/slog`.
-* [ ] Реализовать graceful shutdown.
-* [ ] Реализовать `/health`.
-* [ ] Реализовать `/ready`.
-* [ ] Добавить `go test ./...`.
-* [ ] Добавить `go vet ./...`.
 
 ### 2. Domain Model
 
@@ -305,6 +305,7 @@
 * [ ] Per-provider SLO.
 * [ ] Per-model latency statistics.
 * [ ] Token accounting.
+* [ ] Add Open Telemery tracing 
 
 ### High Availability
 

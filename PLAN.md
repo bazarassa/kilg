@@ -1,5 +1,5 @@
 ---
-name: Kafka LLM Gateway
+name: Kafka Interference LLM Gateway
 overview: "С нуля реализовать высоконадёжный Go-сервис-прокси между клиентами OpenAI/llama.cpp-compatible API и несколькими LLM-провайдерами"
 todos:
   - id: backend-foundation
@@ -19,7 +19,7 @@ isProject: false
 
 # PLAN.md
 
-# Kafka LLM Gateway — план разработки
+# Kafka Interference LLM Gateway — план разработки
 
 ## 1. Цель проекта
 

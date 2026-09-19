@@ -46,7 +46,7 @@ OLLAMA_EMBED_MODEL=nomic-embed-text:latest                           # Моде�
 
 # PLAN.md
 
-# Kafka LLM Gateway — план разработки
+# Kafka Interference LLM Gateway — план разработки
 
 ## 1. Цель проекта
 
