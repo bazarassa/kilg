@@ -1,0 +1,57 @@
+version: "2"
+
+run:
+  timeout: 3m
+
+linters:
+  default: none
+  enable:
+    - revive
+    - staticcheck
+    - misspell
+    - godot
+    - cyclop
+    - gocognit
+    - gocritic
+    - prealloc
+    - wsl_v5
+    - goconst
+  settings:
+    revive:
+      rules:
+        - name: line-length-limit
+          arguments: [120]
+    wsl_v5:
+      allow-first-in-block: true
+      allow-whole-block: false
+      branch-max-lines: 2
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - std-error-handling
+    paths:
+      - ".*mocks.*"
+      - vendor
+      - ".*gen.*"
+    rules:
+      - linters: [revive]
+        text: 'should not use basic type string as key in context.WithValue'
+      - linters: [revive]
+        text: "don't use an underscore in package name"
+      - linters: [staticcheck]
+        text: 'SA1029:' # the same as revive's rule about string as a key in context.WithValue
+      - linters: [revive]
+        text: "comment on exported var"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    gofmt:
+      simplify: true
+    goimports:
+      local-prefixes:
+        - kafka-llm-gateway
+
