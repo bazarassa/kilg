@@ -15,21 +15,22 @@ type Config struct {
 	HTTPAddr       string
 	WorkerHTTPAddr string
 	APIKeys        []string // empty means auth disabled
+	DefaultModel   string   // default logical route, for example "heavy" (litellm or ollama)
 
 	// Kafka
-	KafkaBrokers         []string
-	KafkaRequestTopic    string
-	KafkaEventsTopic     string
-	KafkaCompletedTopic  string
-	KafkaFailedTopic     string
-	KafkaDLQTopic        string
-	KafkaConsumerGroup   string
-	KafkaWorkerGroup     string
-	KafkaAutoCreate      bool
-	KafkaPartitions      int
-	KafkaReplication     int
-	KafkaConsumerStart   string // "latest" or "earliest"
-	KafkaAddressRewrite  string // comma-separated "advertised=actual" pairs
+	KafkaBrokers        []string
+	KafkaRequestTopic   string
+	KafkaEventsTopic    string
+	KafkaCompletedTopic string
+	KafkaFailedTopic    string
+	KafkaDLQTopic       string
+	KafkaConsumerGroup  string
+	KafkaWorkerGroup    string
+	KafkaAutoCreate     bool
+	KafkaPartitions     int
+	KafkaReplication    int
+	KafkaConsumerStart  string // "latest" or "earliest"
+	KafkaAddressRewrite string // comma-separated "advertised=actual" pairs
 
 	// Heavy LLM
 	HeavyBaseURL   string
@@ -42,9 +43,9 @@ type Config struct {
 	HeavyHeartbeat time.Duration
 
 	// LiteLLM
-	LiteLLMURL    string
-	LiteLLMModel  string
-	LiteLLMAPIKey string
+	LiteLLMURL     string
+	LiteLLMModel   string
+	LiteLLMAPIKey  string
 	LiteLLMTimeout time.Duration
 
 	// Ollama
@@ -65,6 +66,7 @@ func Default() Config {
 	return Config{
 		HTTPAddr:            ":8080",
 		WorkerHTTPAddr:      ":8081",
+		DefaultModel:        "heavy",
 		KafkaBrokers:        []string{"REDACTED:9092"},
 		KafkaRequestTopic:   "llm.requests",
 		KafkaEventsTopic:    "llm.events",
@@ -79,7 +81,7 @@ func Default() Config {
 		KafkaConsumerStart:  "latest",
 		KafkaAddressRewrite: "",
 
-		HeavyBaseURL:   "http://REDACTED:8082/v1",
+		HeavyBaseURL:   "http://deep.llm.net:8080/v1",
 		HeavyModel:     "HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF:Q6_K_P",
 		HeavyTimeout:   2 * time.Hour,
 		HeavyIdle:      10 * time.Minute,
@@ -87,7 +89,7 @@ func Default() Config {
 		HeavyMaxRetry:  3,
 		HeavyHeartbeat: 30 * time.Second,
 
-		LiteLLMURL:     "http://REDACTED:4000/v1",
+		LiteLLMURL:     "http://fast.llm.net:8081/v1",
 		LiteLLMModel:   "gemma-4-E4B-it-GGUF",
 		LiteLLMTimeout: 5 * time.Minute,
 
@@ -106,6 +108,7 @@ func Default() Config {
 func Load() Config {
 	c := Default()
 	c.HTTPAddr = getEnv("HTTP_ADDR", c.HTTPAddr)
+	c.DefaultModel = getEnv("DEFAULT_MODEL", c.DefaultModel)
 	c.WorkerHTTPAddr = getEnv("WORKER_HTTP_ADDR", c.WorkerHTTPAddr)
 	if keys := getEnv("API_KEYS", ""); keys != "" {
 		for _, k := range strings.Split(keys, ",") {
