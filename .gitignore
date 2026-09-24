@@ -4,9 +4,6 @@ Makefile_bk
 goprint.sh
 
 
-internal/api/server_test.go_bk
-internal/api/ulid.go_bk
-
 # Build artifacts
 /bin/gateway
 /bin/worker
@@ -16,3 +13,14 @@ internal/api/ulid.go_bk
 
 # Coverage
 coverage.out
+
+# BK
+internal/api/server_test.go_bk
+internal/api/ulid.go_bk
+cmd/worker/main.go_bk
+internal/api/consumer.go_bk
+internal/config/config.go_bk
+internal/kafka/producer.go_bk
+internal/providers/heavy/client.go_bk
+internal/providers/openai_client.go_bk
+internal/worker/worker.go_bk
