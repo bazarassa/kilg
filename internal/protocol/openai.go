@@ -2,6 +2,34 @@ package protocol
 
 import "encoding/json"
 
+// SwaggerChatMessage описывает ChatMessage для OpenAPI.
+//
+// Реальный ChatMessage использует json.RawMessage, потому что OpenAI-compatible
+// API допускает различные формы content. Swag не умеет корректно раскрывать
+// json.RawMessage, поэтому для документации используется отдельная модель.
+type SwaggerChatMessage struct {
+	Role    string `json:"role" example:"user"`
+	Content string `json:"content" example:"Расскажи историю про программиста и кота"`
+	Name    string `json:"name,omitempty" example:"user"`
+}
+
+// SwaggerChatRequest описывает входящий OpenAI-compatible request.
+//
+// Это исключительно документационная модель. Runtime продолжает использовать
+// ChatRequest с json.RawMessage и Extra.
+type SwaggerChatRequest struct {
+	Model               string               `json:"model" example:"heavy"`
+	Messages            []SwaggerChatMessage `json:"messages"`
+	Stream              bool                 `json:"stream,omitempty" example:"false"`
+	Temperature         *float64             `json:"temperature,omitempty" example:"0.7"`
+	TopP                *float64             `json:"top_p,omitempty" example:"0.9"`
+	MaxTokens           *int                 `json:"max_tokens,omitempty" example:"1024"`
+	MaxCompletionTokens *int                 `json:"max_completion_tokens,omitempty" example:"1024"`
+	Stop                string               `json:"stop,omitempty"`
+	PresencePenalty     *float64             `json:"presence_penalty,omitempty" example:"0"`
+	FrequencyPenalty    *float64             `json:"frequency_penalty,omitempty" example:"0"`
+}
+
 // ChatMessage is an OpenAI-compatible chat message. Extra provider-specific
 // fields are preserved via Extra.
 type ChatMessage struct {
