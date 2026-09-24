@@ -51,6 +51,85 @@ DELETE /v1/chat/completions/{id}
 GET    /v1/chat/completions/{id}/messages
 ```
 
+
+## Gateway
+
+                                  
+Текущий Gateway уже делает:
+                            
+```text
+Kafka
+  │
+  │ llm.events
+  ▼
+RunEventConsumer()
+  │
+  ├── jobs.Apply(event)
+  │
+  └── dispatch.Dispatch(event)
+             │
+             ▼
+        SSE client
+```
+  
+Именно это реализовано здесь: `RunEventConsumer()` читает `llm.events`, вызывает `s.jobs.Apply(ev)` и передаёт event в `Dispatcher`.
+    
+А `writeEvent()` уже умеет превращать `TypeCompleted` в terminal SSE response.
+    
+Поэтому после нового worker flow:
+                
+```text
+llm.requests
+      │
+      ▼
+    Worker
+      │
+      ├──────────────► llm.completed
+      │
+      └──────────────► llm.events
+                            │
+                            ▼
+                         Gateway
+                            │
+                            ▼
+                         Client
+```
+
+и `Gateway` уже превратит это в terminal SSE event.
+    
+---
+      
+# Но есть один важный архитектурный нюанс
+      
+**Gateway не читает `llm.completed` в текущей реализации.**
+                            
+Он читает:
+                            
+```text
+llm.events
+```
+а `llm.completed` используется как:
+  
+```text
+готовый aggregate result
+```
+  
+для других downstream consumers.
+Это нормально и я бы **не объединял эти два топика**.
+  
+Получается чёткое разделение:
+```text    
+| Topic           | Назначение                               |
+| --------------- | ---------------------------------------- |
+| `llm.requests`  | очередь заданий Worker                   |
+| `llm.events`    | event log для Gateway/SSE/replay         |
+| `llm.completed` | готовый результат генерации              |
+| `llm.failed`    | terminal failure                         |
+| `llm.dlq`       | сообщения, которые не удалось обработать |
+```
+Текущий Gateway именно так и построен: `jobs.Manager` считает Kafka event log источником истины и может восстанавливать состояние через replay.
+
+
 ### Chat Completions
 
 Основной endpoint:
@@ -62,7 +141,7 @@ POST /v1/chat/completions
 Пример запроса с явным указанием модели:
 
 ```bash
-curl -N -sS http://REDACTED:8080/v1/chat/completions \
+curl -N -sS http://REDACTED:18080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer mp123' \
   -d '{
@@ -118,11 +197,62 @@ export DEFAULT_MODEL=heavy
 
 Поддержка запросов без `model` является расширением gateway. В стандартном OpenAI-compatible API клиент обычно передаёт модель явно.
 
+
+### Итоговая схема работы KILG после рефакторинга
+
+```text
+                     ┌─────────────────────┐
+                     │     HTTP Gateway     │
+                     │     :18080           │
+                     └──────────┬──────────┘
+                                │
+                                │ publish
+                                ▼
+                         ┌──────────────┐
+                         │ llm.requests │
+                         │ 3 partitions │
+                         └──────┬───────┘
+                                │
+                    consumer group:
+                    heavy-llm-worker
+                                │
+                    ┌───────────┴───────────┐
+                    │                       │
+                 Worker #1              Worker #2
+                    │                       │
+                    └───────────┬───────────┘
+                                │
+                                ▼
+                       HTTP OpenAI API
+                       stream=false
+                                │
+                                ▼
+                       ┌────────────────┐
+                       │  LLM response   │
+                       └───────┬────────┘
+                               │
+                 ┌─────────────┼──────────────┐
+                 ▼              ▼               ▼
+          llm.completed   llm.events      on failure
+                 │              │               │
+                 │              ▼               ├──    llm.failed
+                 │          Gateway             │
+                 │          consumer             └──    llm.dlq
+                 │              │
+                 │              ▼
+                 │           Dispatcher
+                 │              │
+                 └─────────────┤
+                               ▼
+                            Client
+```
+
+
 ### Асинхронный режим
 
 Для постановки запроса в Kafka без ожидания генерации используется
 
 
-MIT Licence
+# MIT Licence
 
 Authored by KILG, 2026
