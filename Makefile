@@ -26,6 +26,8 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "1.0
 BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
+ENV_FILE ?= .env
+
 .PHONY: help
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -87,10 +89,10 @@ docs: .install-swag
 	@mkdir -p "$(PROJECT_DOCS)"
 	"$(SWAG_BIN)" init -g cmd/gateway/main.go -o "$(PROJECT_DOCS)"
 
-# Serve Swagger UI locally
+# Serve Swagger UI locally (Опционально не тестировалось)
 .PHONY: swagger
 swagger: docs
-	@echo "Serving Swagger UI on http://REDACTED:8081/swagger/"
+	@echo "Serving Swagger UI on http://localhost:8081/swagger/"
 	@docker run --rm -p 8081:8080 -e SWAGGER_JSON=/docs/swagger.json -v $(PWD)/docs:/docs swaggerapi/swagger-ui
 
 #ТЕСТЫ коротко
@@ -183,8 +185,8 @@ build-ci: ## Builds for CI Linux (amd64) file name bin/gateway and bin/worker
 run: build
 	@mkdir -p /tmp/llmtest
 
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	@KAFKA_BROKERS=31.28.27.171:9092 \
+	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	HTTP_ADDR=:18080 \
 	LOG_LEVEL=info \
@@ -194,7 +196,7 @@ run: build
 		> /tmp/llmtest/gateway.log 2>&1 &
 
 	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	WORKER_HTTP_ADDR=:18081 \
 	LOG_LEVEL=debug \
@@ -207,31 +209,53 @@ run: build
 start: build-mac
 	@mkdir -p /tmp/llmtest
 	
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	@export KAFKA_BROKERS=31.28.27.171:9092 \
+	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	HTTP_ADDR=:18080 \
+        CONTEXT_WINDOW=8192 \
+        SSE_BUFFER_SIZE=1024 \
 	LOG_LEVEL=info \
-	OPENAI_BASE_URL=http://REDACTED:19090/v1 \
-	OPENAI_MODEL=mock-model \
-	nohup $(BINARY_PATH_GATEWAY)-kilg-darwin-amd64 \
+	OPENAI_BASE_URL=https://deep.llm.net/v1 \
+        OPENAI_MODEL=HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF:Q6_K_P \
+        OPENAI_KEY=mpQ \
+        OPENAI_MODEL=mock-model \
+        HEAVY_LLM_TIMEOUT=2h \
+        HEAVY_LLM_IDLE_TIMEOUT=10m \
+        HEAVY_WORKERS=2 \
+        HEAVY_MAX_RETRY=3 \
+        HEAVY_HEARTBEAT=30s \
+        LITELLM_URL=http://31.28.27.171:8081/v1 \
+        LITELLM_MODEL=/models/models/gemma-4-E4B/gemma-4-E4B-it-ultra-uncensored-heretic-Q2_K_XL.gguf \
+        LITELLM_API_KEY=mpQ \
+        LITELLM_TIMEOUT=5m \
+        OLLAMA_URL=http://31.28.27.171:11434 \
+        OLLAMA_MODEL=llama3.2:3b-instruct-q4_K_M \
+        OLLAMA_EMBED_MODEL=nomic-embed-text:latest \
+        OLLAMA_API_KEY=ollama \
+        OLLAMA_TIMEOUT=5m \
+
+	@test -f "$(ENV_FILE)" || { echo "Missing $(ENV_FILE)"; exit 1; }
+	@set -a; . "$(ENV_FILE)"; set +a; nohup $(BINARY_PATH_GATEWAY)-kilg-darwin-amd64 \
 		> /tmp/llmtest/gateway.log 2>&1 &
 	 
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	@export KAFKA_BROKERS=31.28.27.171:9092 \
+	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	WORKER_HTTP_ADDR=:18081 \
 	LOG_LEVEL=debug \
-	nohup $(BINARY_PATH_WORKER)-kilg-darwin-amd64 \
+        
+	@test -f "$(ENV_FILE)" || { echo "Missing $(ENV_FILE)"; exit 1; }
+	@set -a; . "$(ENV_FILE)"; set +a; nohup $(BINARY_PATH_WORKER)-kilg-darwin-amd64 \
 		> /tmp/llmtest/worker.log 2>&1 &
 
-	@echo "LLM gateway and worker started - See /tmp/llmtest/gateway.log and /tmp/llmtest/worker.log"
+	@echo "LOG: LLM gateway and worker started - See /tmp/llmtest/gateway.log and /tmp/llmtest/worker.log"
 
 .PHONY: stop
 stop:   ## Stop LLM gateway and worker process
-	@pgrep -f '[/](gateway-kilg-darwin-amd64|gateway-kilg-darwin-amd64)$$' | xargs -r kill 2>/dev/null || true
-	@pgrep -f '[/](worker-kilg-darwin-amd64|worker-kilg-darwin-amd64)$$' | xargs -r kill 2>/dev/null || true
-	@echo "LLM gateway and worker stopped"
+	@pgrep -f '[/](gateway-kilg-darwin-amd64|gateway-kilg-linux-amd64)$$' | xargs -r kill 2>/dev/null || true
+	@pgrep -f '[/](worker-kilg-darwin-amd64|worker-kilg-linux-amd64)$$' | xargs -r kill 2>/dev/null || true
+	@echo "LOG: LLM gateway and worker stopped"
 	
 .PHONY: kill
 kill:   ## Kill LLM gateway and worker process
