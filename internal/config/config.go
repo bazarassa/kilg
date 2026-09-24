@@ -81,7 +81,7 @@ func Default() Config {
 		KafkaConsumerStart:  "latest",
 		KafkaAddressRewrite: "",
 
-		HeavyBaseURL:   "http://deep.llm.net:8080/v1",
+		HeavyBaseURL:   "https://deep.llm.net/v1",
 		HeavyModel:     "HauhauCS/Qwen3.8-27B-Uncensored-HauhauCS-Aggressive-MTP-GGUF:Q6_K_P",
 		HeavyTimeout:   2 * time.Hour,
 		HeavyIdle:      10 * time.Minute,
@@ -90,10 +90,10 @@ func Default() Config {
 		HeavyHeartbeat: 30 * time.Second,
 
 		LiteLLMURL:     "http://fast.llm.net:8081/v1",
-		LiteLLMModel:   "gemma-4-E4B-it-GGUF",
+		LiteLLMModel:   "/models/models/gemma-4-E4B/gemma-4-E4B-it-ultra-uncensored-heretic-Q2_K_XL.gguf",
 		LiteLLMTimeout: 5 * time.Minute,
 
-		OllamaURL:        "http://REDACTED:11434",
+		OllamaURL:        "http://ollama.llm.net:11434",
 		OllamaModel:      "llama3.2:3b-instruct-q4_K_M",
 		OllamaEmbedModel: "nomic-embed-text:latest",
 		OllamaTimeout:    5 * time.Minute,
@@ -134,7 +134,7 @@ func Load() Config {
 
 	c.HeavyBaseURL = getEnv("OPENAI_BASE_URL", c.HeavyBaseURL)
 	c.HeavyModel = getEnv("OPENAI_MODEL", c.HeavyModel)
-	c.HeavyAPIKey = getEnv("OPENAI_KEY", "")
+	c.HeavyAPIKey = getEnv("OPENAI_KEY", "REDACTED")
 	c.HeavyTimeout = getDuration("HEAVY_LLM_TIMEOUT", c.HeavyTimeout)
 	c.HeavyIdle = getDuration("HEAVY_LLM_IDLE_TIMEOUT", c.HeavyIdle)
 	c.HeavyWorkers = getInt("HEAVY_WORKERS", c.HeavyWorkers)
