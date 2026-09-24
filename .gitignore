@@ -1,5 +1,6 @@
 .env
 docs
+Makefile
 Makefile_bk
 goprint.sh
 
@@ -13,6 +14,7 @@ goprint.sh
 
 # Coverage
 coverage.out
+
 
 # BK
 internal/api/server_test.go_bk

@@ -64,10 +64,10 @@ type Config struct {
 // Default returns a Config populated with defaults.
 func Default() Config {
 	return Config{
-		HTTPAddr:            ":8080",
-		WorkerHTTPAddr:      ":8081",
+		HTTPAddr:            ":18080",
+		WorkerHTTPAddr:      ":18081",
 		DefaultModel:        "heavy",
-		KafkaBrokers:        []string{"REDACTED:9092"},
+		KafkaBrokers:        []string{"kafka.llm.net:9092"},
 		KafkaRequestTopic:   "llm.requests",
 		KafkaEventsTopic:    "llm.events",
 		KafkaCompletedTopic: "llm.completed",

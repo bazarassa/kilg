@@ -90,7 +90,7 @@ docs: .install-swag
 # Serve Swagger UI locally
 .PHONY: swagger
 swagger: docs
-	@echo "Serving Swagger UI on http://REDACTED:8081/swagger/"
+	@echo "Serving Swagger UI on http://localhost:8081/swagger/"
 	@docker run --rm -p 8081:8080 -e SWAGGER_JSON=/docs/swagger.json -v $(PWD)/docs:/docs swaggerapi/swagger-ui
 
 #ТЕСТЫ коротко
@@ -183,18 +183,18 @@ build-ci: ## Builds for CI Linux (amd64) file name bin/gateway and bin/worker
 run: build
 	@mkdir -p /tmp/llmtest
 
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	@KAFKA_BROKERS=kafka.llm.net:9092 \
+	KAFKA_ADDRESS_REWRITE=kafka.llm.net:9093=kafka.llm.net:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	HTTP_ADDR=:18080 \
 	LOG_LEVEL=info \
-	OPENAI_BASE_URL=http://REDACTED:19090/v1 \
+	OPENAI_BASE_URL=https://deep.llm.net/v1 \
 	OPENAI_MODEL=mock-model \
 	nohup $(BINARY_PATH_GATEWAY) \
 		> /tmp/llmtest/gateway.log 2>&1 &
 
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	@KAFKA_BROKERS=localhost:9092 \
+	KAFKA_ADDRESS_REWRITE=localhost:9093=localhost:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	WORKER_HTTP_ADDR=:18081 \
 	LOG_LEVEL=debug \
@@ -207,18 +207,18 @@ run: build
 start: build-mac
 	@mkdir -p /tmp/llmtest
 	
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	@KAFKA_BROKERS=kafka.llm.net:9092 \
+	KAFKA_ADDRESS_REWRITE=kafka.llm.net:9093=kafka.llm.net:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	HTTP_ADDR=:18080 \
 	LOG_LEVEL=info \
-	OPENAI_BASE_URL=http://REDACTED:19090/v1 \
+	OPENAI_BASE_URL=https://deep.llm.net/v1 \
 	OPENAI_MODEL=mock-model \
 	nohup $(BINARY_PATH_GATEWAY)-kilg-darwin-amd64 \
 		> /tmp/llmtest/gateway.log 2>&1 &
 	 
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=REDACTED:9093=REDACTED:9092 \
+	@KAFKA_BROKERS=kafka.llm.net:9092 \
+	KAFKA_ADDRESS_REWRITE=kafka.llm.net:9093=kafka.llm.net:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	WORKER_HTTP_ADDR=:18081 \
 	LOG_LEVEL=debug \
@@ -244,4 +244,3 @@ clean:
 	rm -rf $(PROJECT_BIN_GATEWAY) && rm -rf $(BINARY_PATH_WORKER)
 	rm -f coverage.out coverage.html
 	rm -f docs/swagger.json docs/swagger.yaml
-
