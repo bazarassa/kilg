@@ -261,8 +261,7 @@ func (w *Worker) process(
 	for {
 		attempt++
 
-		//response, err := w.runOnce(
-                _, err := w.runOnce(
+		_, err := w.runOnce(
 			ctx,
 			req,
 			attempt,
@@ -783,7 +782,7 @@ func (w *Worker) handleInvalidRequest(
 		Attempt:   0,
 		Error:     parseErr.Error(),
 		Timestamp: time.Now().UTC(),
-		Original:  rec.Value,
+		Original:  validRawOrString(rec.Value),
 	}
 
 	data, err := json.Marshal(dlq)
@@ -807,6 +806,29 @@ func (w *Worker) handleInvalidRequest(
 	}
 
 	return nil
+}
+
+// validRawOrString returns b as a json.RawMessage that always survives
+// json.Marshal.
+//
+// If b is not valid JSON (poison message), it is stored as a JSON
+// string.
+//
+// Otherwise the whole DLQRecord would be unmarshallable and the
+// message could never be quarantined.
+func validRawOrString(b []byte) json.RawMessage {
+	var probe json.RawMessage
+
+	if json.Unmarshal(b, &probe) == nil {
+		return json.RawMessage(b)
+	}
+
+	data, err := json.Marshal(string(b))
+	if err != nil {
+		return json.RawMessage("null")
+	}
+
+	return data
 }
 
 func (w *Worker) publish(
