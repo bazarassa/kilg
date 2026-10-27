@@ -9,7 +9,7 @@ import (
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
-	if cfg.HTTPAddr != ":8080" {
+	if cfg.HTTPAddr != ":18080" {
 		t.Errorf("HTTPAddr = %q", cfg.HTTPAddr)
 	}
 	if cfg.HeavyWorkers != 2 {
@@ -24,6 +24,7 @@ func TestLoadFromEnv(t *testing.T) {
 	// Save and restore env
 	oldAddr := os.Getenv("HTTP_ADDR")
 	oldKeys := os.Getenv("API_KEYS")
+
 	defer func() {
 		os.Setenv("HTTP_ADDR", oldAddr)
 		os.Setenv("API_KEYS", oldKeys)
