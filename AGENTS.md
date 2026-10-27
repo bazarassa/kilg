@@ -47,7 +47,8 @@ Kafka Interference LLM Gateway - Kafka-backed gateway for routing chat completio
 	LOG_LEVEL=debug \
 	nohup ./bin/worker-kilg-darwin-amd64 \
 		> /tmp/llmtest/worker.log 2>&1 &`
-* **Запуск worker и gateway:** `make run`
+
+* **Запуск worker и gateway:** `make start`
 
 
 * **Остановка gateway:** `pgrep -f '[/](gateway-kilg-darwin-amd64|gateway-kilg-linux-amd64)$$' | xargs -r kill 2>/dev/null || true`

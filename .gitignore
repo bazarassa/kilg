@@ -1,8 +1,15 @@
 .env
-docs
-Makefile
 Makefile_bk
 goprint.sh
+
+# Generated swagger (make docs)
+/docs
+/docs/docs.go
+/docs/swagger.json
+/docs/swagger.yaml
+
+# Local Go build cache
+/.gocache/
 
 
 # Build artifacts
@@ -14,6 +21,7 @@ goprint.sh
 
 # Coverage
 coverage.out
+coverage.html
 
 
 # BK

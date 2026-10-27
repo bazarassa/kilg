@@ -67,7 +67,7 @@ lint-fast: .install-linter
 	GOFLAGS=-buildvcs=false $(GOLANGCI_LINT) run ./... --fast --config=./.golangci.yml
 
 .PHONY: install
-install: .install-deps .install-swag .install-moq .install-linter
+install: .install-deps .install-swag .install-moq .install-linter ## Install deps (swag,moq,linter)
 
 .PHONY: fmt
 fmt: ## Format code fmt
@@ -79,7 +79,7 @@ vet: ## Check code vet
 	@echo "Formatting code..."
 	go vet ./...
 
-docs: .install-swag
+docs: .install-swag ## Generating Swagger documentation
 	@echo "Using Swagger binary: $(SWAG_BIN)"
 	@test -x "$(SWAG_BIN)" || { \
 		echo "Error: swag was not found at $(SWAG_BIN)"; \
@@ -185,8 +185,8 @@ build-ci: ## Builds for CI Linux (amd64) file name bin/gateway and bin/worker
 run: build
 	@mkdir -p /tmp/llmtest
 
-	@KAFKA_BROKERS=31.28.27.171:9092 \
-	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
+	@KAFKA_BROKERS=kafka.llm.net:9092 \
+	KAFKA_ADDRESS_REWRITE=kafka.llm.net:9093=kafka.llm.net:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	HTTP_ADDR=:18080 \
 	LOG_LEVEL=info \
@@ -195,8 +195,8 @@ run: build
 	nohup $(BINARY_PATH_GATEWAY) \
 		> /tmp/llmtest/gateway.log 2>&1 &
 
-	@KAFKA_BROKERS=REDACTED:9092 \
-	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
+	@KAFKA_BROKERS=kafka.llm.net:9092 \
+	KAFKA_ADDRESS_REWRITE=kafka.llm.net:9093=kafka.llm.net:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	WORKER_HTTP_ADDR=:18081 \
 	LOG_LEVEL=debug \
@@ -206,11 +206,11 @@ run: build
 	@echo "LLM gateway and worker started - See /tmp/llmtest/gateway.log and /tmp/llmtest/worker.log"
 
 .PHONY: start
-start: build-mac
+start: build-mac ## Start LLM gateway and worker process
 	@mkdir -p /tmp/llmtest
 	
-	@export KAFKA_BROKERS=31.28.27.171:9092 \
-	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
+	@export KAFKA_BROKERS=kafka.llm.net:9092 \
+	KAFKA_ADDRESS_REWRITE=kafka.llm.net:9093=kafka.llm.net:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	HTTP_ADDR=:18080 \
         CONTEXT_WINDOW=8192 \
@@ -225,11 +225,11 @@ start: build-mac
         HEAVY_WORKERS=2 \
         HEAVY_MAX_RETRY=3 \
         HEAVY_HEARTBEAT=30s \
-        LITELLM_URL=http://31.28.27.171:8081/v1 \
+        LITELLM_URL=http://fast.llm.net:8081/v1 \
         LITELLM_MODEL=/models/models/gemma-4-E4B/gemma-4-E4B-it-ultra-uncensored-heretic-Q2_K_XL.gguf \
         LITELLM_API_KEY=mpQ \
         LITELLM_TIMEOUT=5m \
-        OLLAMA_URL=http://31.28.27.171:11434 \
+        OLLAMA_URL=http://ollama.llm.net:11434 \
         OLLAMA_MODEL=llama3.2:3b-instruct-q4_K_M \
         OLLAMA_EMBED_MODEL=nomic-embed-text:latest \
         OLLAMA_API_KEY=ollama \
@@ -239,8 +239,8 @@ start: build-mac
 	@set -a; . "$(ENV_FILE)"; set +a; nohup $(BINARY_PATH_GATEWAY)-kilg-darwin-amd64 \
 		> /tmp/llmtest/gateway.log 2>&1 &
 	 
-	@export KAFKA_BROKERS=31.28.27.171:9092 \
-	KAFKA_ADDRESS_REWRITE=31.28.27.171:9093=31.28.27.171:9092 \
+	@export KAFKA_BROKERS=kafka.llm.net:9092 \
+	KAFKA_ADDRESS_REWRITE=kafka.llm.net:9093=kafka.llm.net:9092 \
 	KAFKA_CONSUMER_START=earliest \
 	WORKER_HTTP_ADDR=:18081 \
 	LOG_LEVEL=debug \

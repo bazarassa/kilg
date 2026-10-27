@@ -2,6 +2,9 @@
 
 # LLM Gateway
 
+> Актуализировано: **2026-10-27** (по результатам анализа — см. [docs/ANALYSIS.md](docs/ANALYSIS.md), [docs/PROJECT.md](docs/PROJECT.md)).
+> Легенда: [x] сделано и работает • [~] сделано частично / с отклонениями • [ ] не сделано.
+
 ## Сделано
 
 ### Архитектура
@@ -13,32 +16,11 @@
 * [x] Определена модель `request_id` для корреляции полного жизненного цикла запроса.
 * [x] Определена модель `sequence` для сохранения порядка streaming events.
 * [x] Определена стратегия `at-least-once delivery`.
-* [x] Определено сохранение raw provider payload.
-* [x] Определено сохранение reasoning events без фильтрации.
+* [x] Определено сохранение raw provider payload (на direct-пути — passthrough; на heavy-пути — **нет**, см. Критично-1).
+* [x] Определено сохранение reasoning events без фильтрации (на heavy-пути **не выполняется**, см. Критично-1).
 * [x] Определён механизм replay после отключения клиента.
 * [x] Определён async API для запросов, превышающих HTTP timeout.
-* [x] Определено разделение Fast Path и Durable Path.
-
-### LLM Providers
-
-* [x] Определён Heavy LLM provider через OpenAI-compatible API.
-* [x] Определён LiteLLM provider для быстрых instruct-запросов.
-* [x] Определён Ollama provider для простых запросов.
-* [x] Определён Ollama provider для embeddings.
-* [x] Определена модель `nomic-embed-text:latest` для embeddings.
-* [x] Определён deterministic routing по имени модели.
-
-### Kafka
-
-* [x] Определён Kafka broker `REDACTED:9092`.
-* [x] Определён topic `llm.requests`.
-* [x] Определён topic `llm.events`.
-* [x] Определён topic `llm.completed`.
-* [x] Определён topic `llm.failed`.
-* [x] Определён topic `llm.dlq`.
-* [x] Определено использование `request_id` как Kafka message key.
-* [x] Определена необходимость `acks=all`.
-* [x] Определено использование idempotent Kafka producer.
+* [x] Определено разделение Fast Path (litellm/ollama) и Durable Path (Kafka + heavy).
 
 ### 1. Go Project Foundation
 
@@ -55,183 +37,165 @@
 * [x] Добавить `go test ./...`.
 * [x] Добавить `go vet ./...`.
 
----
-
-## В работе
-
 ### 2. Domain Model
 
-* [ ] Реализовать `ChatRequest`.
-* [ ] Реализовать `ChatResponse`.
-* [ ] Реализовать `ChatCompletionChunk`.
-* [ ] Реализовать `LLMJob`.
-* [ ] Реализовать `LLMEvent`.
-* [ ] Реализовать `JobStatus`.
-* [ ] Реализовать provider abstraction.
-* [ ] Реализовать `request_id`.
-* [ ] Реализовать `event_id`.
-* [ ] Реализовать `sequence`.
-* [ ] Реализовать `json.RawMessage` для provider payload.
+* [x] Реализовать `ChatRequest` / `ChatResponse` / `ChatChunk` (с сохранением неизвестных полей).
+* [x] Реализовать `Job` (job state) и store.
+* [x] Реализовать `Event` (envelope).
+* [x] Реализовать `JobStatus`.
+* [x] Реализовать provider abstraction (`providers.Provider`).
+* [x] Реализовать `request_id` (монотонный ULID).
+* [x] Реализовать `event_id`.
+* [x] Реализовать `sequence`.
+* [x] Реализовать `json.RawMessage` для provider payload.
 
 ### 3. Kafka
 
-* [ ] Реализовать Kafka producer.
-* [ ] Реализовать Kafka consumer.
-* [ ] Создать Kafka topics.
-* [ ] Настроить producer `acks=all`.
-* [ ] Включить idempotent producer.
-* [ ] Реализовать retry.
-* [ ] Реализовать consumer groups.
-* [ ] Реализовать graceful consumer shutdown.
-* [ ] Реализовать DLQ.
-* [ ] Проверить ordering по `request_id`.
-* [ ] Проверить consumer offset management.
+* [x] Реализовать Kafka producer (`acks=all`, idempotent, retry, подтверждение до ACK).
+* [x] Реализовать Kafka consumer (consumer groups, session context, at-least-once, MarkMessage после обработки).
+* [x] Создать Kafka topics (auto-create, 5 топиков).
+* [x] Настроить producer `acks=all`.
+* [x] Включить idempotent producer.
+* [x] Реализовать retry (producer retry + worker job retry).
+* [x] Реализовать consumer groups (`gateway`, `heavy-llm-worker`).
+* [x] Реализовать graceful consumer shutdown.
+* [x] Реализовать DLQ (poison messages + exhausted retries).
+* [x] Проверить ordering по `request_id` (key = request_id).
+* [x] Реализовать consumer offset management (auto-commit 1s, commit after processing).
 
 ### 4. Event Protocol
 
-* [ ] Реализовать `queued` event.
-* [ ] Реализовать `started` event.
-* [ ] Реализовать `reasoning` event.
-* [ ] Реализовать `content` event.
-* [ ] Реализовать `tool_call` event.
-* [ ] Реализовать `usage` event.
-* [ ] Реализовать `heartbeat` event.
-* [ ] Реализовать `completed` event.
-* [ ] Реализовать `failed` event.
-* [ ] Реализовать `cancelled` event.
-* [ ] Добавить schema tests.
-* [ ] Проверить сохранение неизвестных provider fields.
+* [x] Реализовать `queued` / `started` / `completed` / `failed` / `cancelled` / `raw_sse` events.
+* [ ] Реализовать `reasoning` / `content` / `tool_call` / `usage` / `heartbeat` **на heavy-пути** (типы объявлены, worker их не публикует — Критично-1).
+* [x] Добавить schema tests (`internal/protocol`).
+* [x] Проверить сохранение неизвестных provider fields (Custom Unmarshal/Marshal, `Extra`).
 
 ### 5. Heavy LLM Worker
 
-* [ ] Реализовать Heavy provider client.
-* [ ] Подключить OpenAI-compatible `/v1/chat/completions`.
-* [ ] Реализовать streaming request.
-* [ ] Реализовать SSE parser.
-* [ ] Реализовать обработку долгого HTTP stream.
-* [ ] Разделить connect timeout и generation timeout.
-* [ ] Реализовать configurable generation timeout.
-* [ ] Реализовать Worker Kafka consumer.
-* [ ] Реализовать Worker concurrency limit.
-* [ ] Реализовать публикацию каждого upstream event в Kafka.
-* [ ] Реализовать `completed` после сохранения последнего chunk.
-* [ ] Реализовать retry transient errors.
-* [ ] Реализовать failed event.
+* [x] Реализовать Heavy provider client (OpenAI-compatible, connect/header/idle/generation timeouts).
+* [x] Подключить OpenAI-compatible `/v1/chat/completions`.
+* [~] Реализовать streaming request — **на direct-пути (Gateway) да; в Worker нет (всегда `stream=false`) — Критично-1**.
+* [~] Реализовать SSE parser — в `OpenAIClient` (direct-путь); Worker не использует.
+* [x] Реализовать обработку долгого HTTP stream (context-based generation timeout, `http.Client.Timeout` не ставится).
+* [x] Разделить connect timeout и generation timeout.
+* [x] Реализовать configurable generation timeout.
+* [x] Реализовать Worker Kafka consumer.
+* [x] Реализовать Worker concurrency limit (семафор, `HEAVY_WORKERS`).
+* [ ] Реализовать публикацию каждого upstream event в Kafka (сейчас — 3 события: queued/started/completed).
+* [~] Реализовать `completed` после сохранения последнего chunk — верно для non-streaming; перепроверить при переходе на streaming.
+* [x] Реализовать retry transient errors (4xx non-retryable, 5xx/timeout retryable, backoff).
+* [x] Реализовать failed event (+ `llm.failed`, + DLQ).
+* [ ] Реализовать heartbeat events (`HEAVY_HEARTBEAT` принимается, игнорируется).
 
 ### 6. Go API
 
-* [ ] Реализовать `POST /v1/chat/completions`.
-* [ ] Реализовать `GET /v1/models`.
-* [ ] Реализовать OpenAI-compatible request parsing.
-* [ ] Реализовать OpenAI-compatible SSE response.
-* [ ] Реализовать Bearer authentication.
-* [ ] Реализовать request validation.
-* [ ] Реализовать provider routing.
-* [ ] Реализовать request creation.
-* [ ] Реализовать публикацию heavy jobs в Kafka.
+* [x] Реализовать `POST /v1/chat/completions`.
+* [x] Реализовать `GET /v1/models` (+ `/{id}`).
+* [x] Реализовать OpenAI-compatible request parsing.
+* [~] Реализовать OpenAI-compatible response — **SSE всегда, даже при `stream:false`; JSON-ответ не возвращаем — Критично-2**; в synth-чанках нет `created`/`model`, `usage` не пересылается на Kafka-пути.
+* [~] Реализовать Bearer authentication — работает при заданных `API_KEYS`; **по умолчанию отключена**.
+* [x] Реализовать request validation.
+* [x] Реализовать provider routing (deterministic по `model`, включая `DEFAULT_MODEL`).
+* [x] Реализовать request creation (ULID).
+* [x] Реализовать публикацию heavy jobs в Kafka.
 
 ### 7. Live Streaming
 
-* [ ] Реализовать SSE dispatcher.
-* [ ] Реализовать mapping `request_id -> active stream`.
-* [ ] Реализовать Kafka event → SSE.
-* [ ] Сохранять порядок events.
-* [ ] Не блокировать Worker на медленном клиенте.
-* [ ] Обрабатывать client disconnect.
-* [ ] Не отменять Heavy job при HTTP disconnect.
+* [x] Реализовать SSE dispatcher.
+* [x] Реализовать mapping `request_id -> active stream`.
+* [x] Реализовать Kafka event → SSE.
+* [x] Сохранять порядок events.
+* [x] Не блокировать Worker на медленном клиенте (bounded buffer + Kafka + replay).
+* [x] Обрабатывать client disconnect.
+* [x] Не отменять Heavy job при HTTP disconnect.
 
 ### 8. Replay
 
-* [ ] Реализовать `Last-Event-ID`.
-* [ ] Реализовать sequence cursor.
-* [ ] Реализовать replay из Kafka.
-* [ ] Реализовать повторное подключение клиента.
-* [ ] Реализовать обнаружение пропущенных sequence.
-* [ ] Реализовать deduplication events.
+* [x] Реализовать `Last-Event-ID`.
+* [x] Реализовать sequence cursor.
+* [x] Реализовать replay из Kafka (full-scan reader — см. Высоко-1).
+* [x] Реализовать повторное подключение клиента (POST-путь: replay → live).
+* [~] Реализовать обнаружение пропущенных sequence (live-поток дедуплицирует `sequence <= lastSent`; **replay-путь дубли не устраняет — Высоко-2**).
+* [~] Реализовать deduplication events (partial, см. выше).
+* [ ] `GET /v1/jobs/{id}/events` — живой tail: сейчас разовый replay с `[DONE]` даже для running-jobs (Высоко-4).
 
 ### 9. Async Jobs
 
-* [ ] Реализовать `POST /v1/jobs`.
-* [ ] Реализовать `GET /v1/jobs/{id}`.
-* [ ] Реализовать `GET /v1/jobs/{id}/events`.
-* [ ] Реализовать `POST /v1/jobs/{id}/cancel`.
-* [ ] Поддержать `Prefer: respond-async`.
-* [ ] Вернуть `202 Accepted` для async jobs.
-* [ ] Сохранять состояние job независимо от HTTP connection.
+* [~] Реализовать `POST /v1/jobs` — **отсутствует как отдельный эндпоинт** (async доступен только через `Prefer: respond-async`).
+* [x] Реализовать `GET /v1/jobs/{id}` (+ восстановление из Kafka при отсутствии).
+* [~] Реализовать `GET /v1/jobs/{id}/events` (replay есть, live tail нет).
+* [ ] Реализовать `POST /v1/jobs/{id}/cancel` / working cancel — `DELETE` меняет локальный статус и публикует `cancelled`, но **Worker не потребляет `llm.events`, отмена не доходит до LLM; terminal-статусы не защищают от «отмотки» — Критично-4**.
+* [x] Поддержать `Prefer: respond-async`.
+* [x] Вернуть `202 Accepted` для async jobs.
+* [~] Сохранять состояние job независимо от HTTP connection (in-memory; после рестарта список пуст, восстановление — on-demand).
 
 ### 10. LiteLLM
 
-* [ ] Реализовать LiteLLM provider.
-* [ ] Реализовать streaming.
-* [ ] Реализовать non-streaming requests.
-* [ ] Подключить `LITELLM_URL`.
-* [ ] Подключить `LITELLM_API_KEY`.
-* [ ] Подключить `LITELLM_MODEL`.
-* [ ] Проверить OpenAI compatibility.
+* [x] Реализовать LiteLLM provider.
+* [x] Реализовать streaming (raw SSE passthrough).
+* [x] Reализовать non-streaming requests (JSON → SSE-чанки; JSON-ответ клиенту — нет, Критично-2).
+* [x] Подключить `LITELLM_URL` / `LITELLM_API_KEY` / `LITELLM_MODEL`.
+* [x] Проверить OpenAI compatibility (на уровне запроса/ответа — см. Критично-2).
 
 ### 11. Ollama
 
-* [ ] Реализовать Ollama chat provider.
-* [ ] Реализовать Ollama streaming.
-* [ ] Реализовать embeddings provider.
-* [ ] Подключить `OLLAMA_URL`.
-* [ ] Подключить `OLLAMA_MODEL`.
-* [ ] Подключить `OLLAMA_EMBED_MODEL`.
-* [ ] Поддержать `CONTEXT_WINDOW`.
+* [x] Реализовать Ollama chat provider (нативный `/api/generate`).
+* [x] Реализовать Ollama streaming (NDJSON → OpenAI chunks).
+* [x] Реализовать embeddings provider (`/api/embed`, `POST /v1/embeddings`).
+* [x] Подключить `OLLAMA_URL` / `OLLAMA_MODEL` / `OLLAMA_EMBED_MODEL`.
+* [ ] Поддержать `CONTEXT_WINDOW` (переменная читается, **не используется** — закладка под auto-async по PLAN/BACKLOG №14).
 
 ### 12. Router
 
-* [ ] Реализовать routing по `model`.
-* [ ] Heavy model → Kafka.
-* [ ] Gemma → LiteLLM.
-* [ ] Llama → Ollama.
-* [ ] Вернуть ошибку для неизвестной модели.
-* [ ] Добавить конфигурацию routing rules.
+* [x] Реализовать routing по `model`.
+* [x] Heavy model → Kafka.
+* [x] Gemma → LiteLLM.
+* [x] Llama → Ollama.
+* [ ] Вернуть ошибку для неизвестной модели (сейчас unknown → heavy с моделью из запроса).
+* [ ] Добавить конфигурацию routing rules (сейчас хардкод по алиасам/физическим именам).
 
 ### 13. Reliability
 
-* [ ] Реализовать `Idempotency-Key`.
-* [ ] Защитить от повторного запуска одного job.
-* [ ] Реализовать retry policy.
-* [ ] Реализовать DLQ.
-* [ ] Реализовать Worker crash recovery.
-* [ ] Реализовать Gateway restart recovery.
-* [ ] Реализовать graceful shutdown.
-* [ ] Проверить duplicate events.
-* [ ] Проверить incomplete generation.
+* [~] Реализовать `Idempotency-Key` (in-memory, без TTL — неограниченный рост; lost on restart — заявить).
+* [ ] Защитить от повторного запуска одного job (в пределах процесса — да; дедупликация worker-повторов при redelivery — нет, Высоко-2).
+* [x] Реализовать retry policy (worker).
+* [x] Реализовать DLQ.
+* [~] Реализовать Worker crash recovery (at-least-once redelivery; дубли событий в event log не устранены).
+* [~] Реализовать Gateway restart recovery (per-job `recoverJob`; job-list после restart пуст).
+* [x] Реализовать graceful shutdown.
+* [~] Проверить duplicate events (live — да; replay — нет).
+* [ ] Проверить incomplete generation (нет сценария «генерация не завершена, что делаем с job»).
 
 ### 14. Observability
 
-* [ ] Добавить Prometheus metrics.
-* [ ] Добавить `llm_requests_total`.
-* [ ] Добавить `llm_requests_active`.
-* [ ] Добавить `llm_generation_duration_seconds`.
-* [ ] Добавить `llm_queue_duration_seconds`.
-* [ ] Добавить `llm_reasoning_tokens_total`.
-* [ ] Добавить `llm_output_tokens_total`.
-* [ ] Добавить `kafka_consumer_lag`.
-* [ ] Добавить `kafka_publish_errors_total`.
-* [ ] Добавить `llm_client_disconnects_total`.
-* [ ] Добавить `llm_replayed_events_total`.
-* [ ] Добавить correlation logging по `request_id`.
+* [x] Добавить Prometheus metrics (`/metrics` в gateway и worker).
+* [x] Добавить `llm_requests_total` / `llm_requests_active` / `llm_requests_failed_total`.
+* [x] Добавить `llm_generation_duration_seconds`.
+* [ ] Добавить `llm_queue_duration_seconds` (зарегистрирована, не заполняется).
+* [ ] Добавить `llm_reasoning_tokens_total` (зарегистрирована, не заполняется; нет данных — heavy-путь non-streaming).
+* [ ] Добавить `llm_output_tokens_total` (зарегистрирована, не заполняется).
+* [ ] Добавить `kafka_consumer_lag` (зарегистрирована, не заполняется — «особо важная» по PLAN §42).
+* [x] Добавить `kafka_publish_errors_total` / `kafka_publish_total`.
+* [x] Добавить `llm_client_disconnects_total` / `llm_reconnects_total` / `llm_replayed_events_total`.
+* [x] Добавить correlation logging по `request_id`.
 
 ### 15. Security
 
-* [ ] Реализовать API authentication.
-* [ ] Исключить provider API keys из Kafka payload.
-* [ ] Исключить API keys из logs.
-* [ ] Исключить API keys из metrics.
-* [ ] Добавить request size limits.
-* [ ] Добавить rate limiting.
-* [ ] Поддержать secrets через environment/Kubernetes Secret.
-* [ ] Проверить TLS для внешних provider endpoints.
-* [ ] Проверить Kafka authentication/TLS при необходимости.
+* [~] Реализовать API authentication (работает при заданных `API_KEYS`; **по умолчанию отключена** — production-риск).
+* [x] Исключить provider API keys из Kafka payload.
+* [x] Исключить API keys from logs.
+* [x] Исключить API keys from metrics.
+* [ ] Add request size limits (нет `MaxBytesReader` на POST-эндпоинтах).
+* [ ] Add rate limiting.
+* [~] Поддержать secrets through environment (есть; **дефолтный API-ключ зашит в `config.go`** — вынести).
+* [x] Проверить TLS for external provider endpoints (TLS ≥1.2, настраиваемые URL).
+* [ ] Проверить Kafka authentication/TLS (не реализовано).
 
 ### 16. Integration Tests
 
-* [ ] Kafka request → Worker → LLM lifecycle.
-* [ ] Gateway → Kafka → Worker lifecycle.
-* [ ] Streaming response lifecycle.
+* [ ] Kafka request → Worker → LLM lifecycle (e2e).
+* [ ] Gateway → Kafka → Worker lifecycle (e2e).
+* [ ] Streaming response lifecycle (e2e; на heavy-пути streaming отсутствует).
 * [ ] Client disconnect during generation.
 * [ ] Gateway restart during generation.
 * [ ] Worker restart during generation.
@@ -242,21 +206,66 @@
 * [ ] DLQ lifecycle.
 * [ ] Slow client handling.
 * [ ] 30+ minute generation simulation.
-* [ ] Preservation of reasoning events.
+* [ ] Preservation of reasoning events (**не может пройти — Критично-1**).
 * [ ] Preservation of full response.
 
 ---
+
+## 🔴 Критично (по анализу от 2026-10-27 — детали в docs/ANALYSIS.md)
+
+1. **Критично-1 (C1): heavy-путь non-streaming — ключевая цель не выполняется.**
+   Worker всегда `stream=false`, в `llm.events` 3 события, `reasoning_content`
+   не сохраняется, heartbeat отсутствует. Нарушены PLAN §8/§9/§55, INV-005,
+   acceptance Tests 1–2/5. → Реализовать streaming worker: raw SSE-чанки в
+   Kafka с инкрементным sequence, reasoning-агрегация, heartbeat по
+   `HEAVY_HEARTBEAT`, `completed` после последнего чанка (INV-004).
+2. **Критично-2 (C2): `stream:false` отвечает SSE, а не JSON.**
+   Все ответы `/v1/chat/completions` — `text/event-stream`. Стандартные
+   OpenAI-SDK-клиенты ломаются. → Добавить JSON-ответ для non-streaming.
+3. **Критично-3 (C3): тестовый конвейер сломан. → ✅ Исправлено (2026-10-27).**
+   Было: `internal/worker` и `internal/providers` test-бинари не
+   компилировались (устаревшие тесты: `fakeProvider` без `CompleteSync`;
+   `ParseChunk` не существует), `internal/config` `TestDefault` падает
+   (ожидает `:8080`, дефолт `:18080`). Теперь: тесты переписаны под
+   `SyncProvider`-worker и актуальный API `OpenAIClient`, добавлены недостающие
+   пакеты (ollama, heavy, litellm, kafka-dialer, jobs, streaming, protocol,
+   api-embeddings/direct-route); `go test ./...`, `go test -race ./...`,
+   `go vet ./...` — зелёные. Остаток: `golangci-lint` не зелёный из-за
+   **предсуществующего** долга в неизменённых файлах (wsl_v5/goconst/gocritic —
+   ~120 находок), а не из-за тестов; см. docs/ANALYSIS.md §C3.
+4. **Критично-4 (C4): отмена фиктивная + терминальные статусы не защищены.**
+   Worker не потребляет `llm.events` → LLM не останавливается; `cancelled`
+   может столкнуться по sequence с `completed`; `jobs.Apply` переводит
+   `cancelled` → `completed`. → Реальный cancel-механизм + state machine.
+5. **Критично-5 (C5): `docs/` в .gitignore — документация не под версионированием.**
+   Свежий клон теряет BACKLOG.md, swagger-спеку и всю документацию;
+   `bin/moq` (8.6 МБ) закоммичен. → Починить .gitignore (игнорировать только
+   сгенерированный swagger), вынести бинарники из git.
+
+## 🟠 Высокий приоритет (по анализу)
+
+* **H1:** Replay/`recoverJob` — полный скан `llm.events` от начала топика на каждый вызов
+  (O(размер лога)). → Per-request cursor/offset или служебный compacted-топик состояния.
+* **H2:** Дубли событий при redelivery не устраняются в replay → двойной content у клиента.
+* **H3:** Безопасность по умолчанию open: нет auth (по умолчанию), нет rate limit,
+  нет лимита размера тела. → `MaxBytesReader`, rate limit, обязательный auth в production.
+* **H4:** `GET /v1/jobs/{id}/events` — разовый replay с `[DONE]`, нет живого tail.
+* **H5:** Sarama (IBM) — библиотека в maintenance mode; API зафиксирован V2_4_0_0.
+* **H6:** Метрики `kafka_consumer_lag`, `llm_queue_duration_seconds`, `llm_tokens_total`,
+  `llm_reasoning/output_tokens_total` зарегистрированы, но не заполняются.
+* **H7:** Single-broker Kafka, RF=1, retention не управляется → при потере брокера
+  теряются все события (PLAN §13 «critical infrastructure limitation»).
 
 ## Идеи на будущее
 
 ### Intelligent Routing
 
 * [ ] Complexity classifier.
-* [ ] Автоматический выбор Heavy / LiteLLM / Ollama.
+* [ ] Автоматический выбор Heavy / LiteLLM / Ollama (BACKLOG №14: auto-async при «тяжёлом» запросе по `CONTEXT_WINDOW`).
 * [ ] Routing по стоимости.
-* [ ] Routing по latency.
-* [ ] Routing по текущей загрузке Worker.
-* [ ] Routing по размеру context.
+* [ ] Routing by latency.
+* [ ] Routing by current Worker load.
+* [ ] Routing by context size.
 
 ### Heavy LLM Scheduling
 
@@ -269,48 +278,48 @@
 
 ### Storage
 
-* [ ] Отдельное persistent storage для job metadata.
-* [ ] PostgreSQL для job state.
-* [ ] Object Storage для долгосрочного хранения generation events.
-* [ ] Архивирование Kafka events.
-* [ ] TTL для completed jobs.
+* [ ] Отдельное persistent storage для job metadata (сейчас in-memory).
+* [ ] PostgreSQL for job state.
+* [ ] Object storage for long-term generation events.
+* [ ] Kafka event archiving.
+* [ ] TTL for completed jobs.
 
 ### Kafka
 
-* [ ] Kafka cluster из нескольких brokers.
+* [ ] Multi-broker Kafka cluster (≥3).
 * [ ] Replication factor >= 3.
 * [ ] `min.insync.replicas >= 2`.
-* [ ] TLS/SASL.
-* [ ] Kafka ACL.
-* [ ] Dedicated Kafka cluster для production.
-* [ ] Schema Registry при необходимости.
+* [ ] TLS/SASL, Kafka ACL.
+* [ ] Dedicated production Kafka cluster.
+* [ ] Schema Registry if needed.
+* [ ] Evaluate migration from IBM/sarama (maintenance mode) to modern client (franz-go).
 
 ### API
 
-* [ ] Полная совместимость с OpenAI API.
-* [ ] `/v1/embeddings`.
+* [ ] Full OpenAI API compatibility (incl. `stream:false` JSON, `usage`, `created`, `model` in chunks).
+* [ ] `/v1/embeddings` для других провайдеров (сейчас Ollama-only).
 * [ ] `/v1/responses`.
 * [ ] Tool calling.
 * [ ] Structured output.
 * [ ] Batch API.
-* [ ] Job cancellation.
+* [ ] Job cancellation (working — Критично-4).
 * [ ] Job priority API.
+* [ ] JWT-токены / временные токены (BACKLOG №5).
 
 ### Observability
 
-* [ ] OpenTelemetry.
+* [ ] OpenTelemetry (BACKLOG №18, вместе с Jaeger-визуализацией).
 * [ ] Distributed tracing.
 * [ ] Grafana dashboards.
 * [ ] Alertmanager alerts.
 * [ ] Per-provider SLO.
-* [ ] Per-model latency statistics.
-* [ ] Token accounting.
-* [ ] Add Open Telemery tracing 
+* [ ] Per-model latency stats.
+* [ ] Token accounting (fill metrics H6).
 
 ### High Availability
 
-* [ ] Несколько Gateway instances.
-* [ ] Несколько Heavy Workers.
+* [ ] Multiple Gateway instances (job-list recovery — M2).
+* [ ] Multiple Heavy Workers (duplicated processes, BACKLOG №16).
 * [ ] Multi-broker Kafka.
 * [ ] Kubernetes deployment.
 * [ ] Horizontal Pod Autoscaler.
@@ -329,3 +338,14 @@
 * [ ] Semantic cache.
 * [ ] RAG integration.
 
+---
+
+## Repo/Docs hygiene (новый раздел, 2026-10-27)
+
+* [ ] Убрать `docs` из .gitignore (игнорировать только `docs/docs.go`, `docs/swagger.json`, `docs/swagger.yaml`).
+* [ ] Убрать `bin/moq` из git (бинарник ставится через `make .install-moq`).
+* [ ] Убрать/документировать `Makefile_bk`, `goprint.sh`, `coverage.out` (stale).
+* [ ] Поправить `Makefile`: мёртвый `export`-блок в `start`, дублирующийся `OPENAI_MODEL`, `clean` с несуществующей `$(PROJECT_BIN_GATEWAY)`, расхождение `run`/AGENTS.md (mock vs реальная модель).
+* [ ] Убрать дефолтный API-ключ-заглушку из `config.go` (`OPENAI_KEY` дефолт «REDACTED» → пустой).
+* [ ] Убрать мёртвый код `terminalChunk` из `chat.go`.
+* [ ] Опечатки/шум в AGENTS.md, PLAN.md, README.md (L4/L8 в ANALYSIS.md).
