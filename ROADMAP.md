@@ -92,7 +92,7 @@
 * [x] Реализовать `POST /v1/chat/completions`.
 * [x] Реализовать `GET /v1/models` (+ `/{id}`).
 * [x] Реализовать OpenAI-compatible request parsing.
-* [~] Реализовать OpenAI-compatible response — **SSE всегда, даже при `stream:false`; JSON-ответ не возвращаем — Критично-2**; в synth-чанках нет `created`/`model`, `usage` не пересылается на Kafka-пути.
+* [x] Реализовать OpenAI-compatible response — `stream:false` → один JSON `chat.completion` (Критично-2 исправлено, 2026-10-27); `stream:true` → SSE. Остаток (M1): в synth-чанках SSE нет `created`/`model`.
 * [~] Реализовать Bearer authentication — работает при заданных `API_KEYS`; **по умолчанию отключена**.
 * [x] Реализовать request validation.
 * [x] Реализовать provider routing (deterministic по `model`, включая `DEFAULT_MODEL`).
@@ -213,15 +213,27 @@
 
 ## 🔴 Критично (по анализу от 2026-10-27 — детали в docs/ANALYSIS.md)
 
-1. **Критично-1 (C1): heavy-путь non-streaming — ключевая цель не выполняется.**
-   Worker всегда `stream=false`, в `llm.events` 3 события, `reasoning_content`
-   не сохраняется, heartbeat отсутствует. Нарушены PLAN §8/§9/§55, INV-005,
-   acceptance Tests 1–2/5. → Реализовать streaming worker: raw SSE-чанки в
-   Kafka с инкрементным sequence, reasoning-агрегация, heartbeat по
-   `HEAVY_HEARTBEAT`, `completed` после последнего чанка (INV-004).
-2. **Критично-2 (C2): `stream:false` отвечает SSE, а не JSON.**
-   Все ответы `/v1/chat/completions` — `text/event-stream`. Стандартные
-   OpenAI-SDK-клиенты ломаются. → Добавить JSON-ответ для non-streaming.
+1. **Критично-1 (C1): heavy-путь non-streaming — ключевая цель. → ✅ Реализовано (2026-10-27).**
+   Worker теперь в streaming-режиме: raw SSE-чанки provider'а публикуются в
+   `llm.events` verbatim (`raw_sse`) с монотонным sequence (в т.ч. между
+   retries), `reasoning_content` агрегируется и сохраняется, heartbeat по
+   `HEAVY_HEARTBEAT` (дефолт 30с), `completed` — после сохранённого
+   последнего чанка (INV-004), агрегат — в `llm.completed`. Gateway не
+   дублирует content для streamed completions; `GET /v1/jobs/{id}` отдаёт
+   итоговый content/reasoning/usage (async mode). PLAN §8/§9/§14/§21/§55,
+   INV-004/005, acceptance Tests 1–2/5/7/8 — выполнены. Остаток: live tail
+   у jobs-events (H4).
+2. **Критично-2 (C2): `stream:false` отвечает SSE, а не JSON. → ✅ Исправлено (2026-10-27).**
+   Теперь `stream:false` (и отсутствие поля — дефолт по спеке) возвращает
+   один JSON-объект `chat.completion` (`application/json`) с полями по
+   OpenAI-спеке: `id`, `object`, `created`, `model`,
+   `choices[0].message{role,content}`, `finish_reason`, `usage`.
+   Kafka-путь: Gateway дожидается terminal-события и собирает ответ из
+   `CompletedPayload` (агрегированные content/reasoning/usage от
+   streaming-Worker'а). Direct-путь: Gateway запускает provider напрямую
+   и агрегирует ответ (объект `chat.completion` или серию чанков).
+   Ошибки provider → 502 + JSON Error-схемы. Поведение `stream:true`
+   (SSE) не изменено.
 3. **Критично-3 (C3): тестовый конвейер сломан. → ✅ Исправлено (2026-10-27).**
    Было: `internal/worker` и `internal/providers` test-бинари не
    компилировались (устаревшие тесты: `fakeProvider` без `CompleteSync`;
@@ -296,7 +308,7 @@
 
 ### API
 
-* [ ] Full OpenAI API compatibility (incl. `stream:false` JSON, `usage`, `created`, `model` in chunks).
+* [~] Full OpenAI API compatibility — `stream:false` JSON done (C2); remaining: `usage`/`created`/`model` in the SSE synthesized chunks (M1).
 * [ ] `/v1/embeddings` для других провайдеров (сейчас Ollama-only).
 * [ ] `/v1/responses`.
 * [ ] Tool calling.

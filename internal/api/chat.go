@@ -159,6 +159,36 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ------------------------------------------------------------
+	// NON-STREAMING MODE (stream: false)
+	// ------------------------------------------------------------
+	//
+	// По OpenAI-спеке при stream:false клиент ожидает ОДИН JSON-
+	// объект chat.completion (application/json), а не SSE-поток.
+	//
+	//     200 {
+	//       "id": "...", "object": "chat.completion",
+	//       "created": 1793115291, "model": "...",
+	//       "choices": [{"index":0,
+	//         "message": {"role":"assistant","content":"..."},
+	//         "finish_reason":"stop"}],
+	//       "usage": {"prompt_tokens":33, ...}
+	//     }
+	//
+	if !req.Stream {
+		s.respondNonStreaming(
+			w,
+			r,
+			requestID,
+			route,
+			req,
+			rawBody,
+			reused,
+		)
+
+		return
+	}
+
+	// ------------------------------------------------------------
 	// KAFKA-BACKED ASYNC ROUTE
 	// ------------------------------------------------------------
 	//
@@ -841,8 +871,16 @@ case protocol.TypeCompleted:
 	// --------------------------------------------------------
 	// 1. Content
 	// --------------------------------------------------------
+	//
+	// В streaming-режиме worker content уже доставлен клиенту
+	// как raw SSE-события (type=raw_sse). Повторная отправка
+	// агрегированного content дублировала бы текст, поэтому
+	// здесь отправляем только финальный finish-чанк.
+	//
+	// Для non-streaming событий (старые/другие producer'ы)
+	// поведение остаётся прежним.
 
-	if p.Content != "" {
+	if !p.Stream && p.Content != "" {
 		contentChunk := map[string]any{
 			"id":     ev.RequestID,
 			"object": "chat.completion.chunk",

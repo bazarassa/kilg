@@ -38,34 +38,55 @@ func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeProvider is a SyncProvider with a configurable outcome.
+// fakeProvider is a streaming test provider: it replays the same
+// script of provider events on every Complete call.
 type fakeProvider struct {
-	mu   sync.Mutex
-	n    int
-	last *providers.ChatRequest
-	resp *protocol.ChatResponse
-	err  error
+	mu     sync.Mutex
+	n      int
+	last   *providers.ChatRequest
+	script []providers.ProviderEvent
+	err    error
+	// delay before the first event (to force heartbeats).
+	delay time.Duration
 }
 
-func (f *fakeProvider) Name() string { return "heavy" }
-
-func (f *fakeProvider) Model() string { return "test-model" }
-
-func (f *fakeProvider) CompleteSync(
-	_ context.Context,
+func (f *fakeProvider) Complete(
+	ctx context.Context,
 	req *providers.ChatRequest,
-) (*protocol.ChatResponse, error) {
+	events chan<- providers.ProviderEvent,
+) error {
+	// Real providers always close the channel when Complete returns.
+	defer close(events)
+
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.n++
 	f.last = req
-	return f.resp, f.err
+	f.mu.Unlock()
+
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	for _, ev := range f.script {
+		select {
+		case events <- ev:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return f.err
 }
 
 // callCount reports how many times the provider was invoked.
 func (f *fakeProvider) callCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	return f.n
 }
 
@@ -73,19 +94,65 @@ func (f *fakeProvider) callCount() int {
 func (f *fakeProvider) lastRequest() *providers.ChatRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
 	return f.last
 }
+
+// failingProducer fails publishes to one topic, passes the rest.
+type failingProducer struct {
+	inner     *kafka.FakeProducer
+	failTopic string
+}
+
+func (p *failingProducer) Publish(
+	ctx context.Context,
+	topic string,
+	key string,
+	value []byte,
+) error {
+	if topic == p.failTopic {
+		return fmt.Errorf("publish to %s failed", topic)
+	}
+
+	return p.inner.Publish(ctx, topic, key, value)
+}
+
+func (p *failingProducer) Close() error {
+	return p.inner.Close()
+}
+
+// fakeConsumer replays a fixed set of records.
+type fakeConsumer struct {
+	records  []kafka.Record
+	closeErr error
+}
+
+func (c *fakeConsumer) Consume(
+	ctx context.Context,
+	fn func(context.Context, kafka.Record) error,
+) error {
+	for _, rec := range c.records {
+		if err := fn(ctx, rec); err != nil {
+			return err
+		}
+	}
+
+	return c.closeErr
+}
+
+func (c *fakeConsumer) Close() error { return nil }
 
 func newTestWorker(
 	t *testing.T,
 	prod kafka.EventProducer,
-	prov *fakeProvider,
+	prov StreamProvider,
 	workers int,
 	maxRetry int,
+	heartbeat time.Duration,
 ) *Worker {
 	t.Helper()
 	return New(prod, prov, testTopics(), testMetrics(), testLogger(),
-		workers, maxRetry, time.Second)
+		workers, maxRetry, heartbeat)
 }
 
 func testRequest(id, model string) protocol.Request {
@@ -98,39 +165,15 @@ func testRequest(id, model string) protocol.Request {
 	}
 }
 
-func stringRaw(s string) json.RawMessage {
-	b, err := json.Marshal(s)
-	if err != nil {
-		panic(err)
-	}
-	return b
-}
-
-func syncResponse(content string) *protocol.ChatResponse {
-	reason := "stop"
-	return &protocol.ChatResponse{
-		ID:     "cmpl-1",
-		Object: "chat.completion",
-		Model:  "test-model",
-		Choices: []protocol.Choice{
-			{
-				Index: 0,
-				Message: protocol.ChatMessage{
-					Role:    "assistant",
-					Content: stringRaw(content),
-				},
-				FinishReason: &reason,
-			},
-		},
-		Usage: &protocol.Usage{
-			PromptTokens:     10,
-			CompletionTokens: 5,
-			TotalTokens:      15,
-		},
+// rawEvent builds a raw SSE provider event with the given data.
+func rawEvent(s string) providers.ProviderEvent {
+	return providers.ProviderEvent{
+		Type: providers.EventRawSSE,
+		Raw:  s,
 	}
 }
 
-// eventValues decodes all records of a topic into protocol.Event slices.
+// eventValues decodes all records of a topic into protocol.Event.
 func eventValues(
 	t *testing.T,
 	prod *kafka.FakeProducer,
@@ -138,31 +181,20 @@ func eventValues(
 ) []protocol.Event {
 	t.Helper()
 	recs := prod.RecordsFor(topic)
+
 	out := make([]protocol.Event, 0, len(recs))
+
 	for _, r := range recs {
 		var ev protocol.Event
+
 		if err := json.Unmarshal(r.Value, &ev); err != nil {
 			t.Fatalf("unmarshal %s record: %v", topic, err)
 		}
+
 		out = append(out, ev)
 	}
-	return out
-}
 
-// expectStartedAndCompleted checks the standard two-event success sequence.
-func expectStartedAndCompleted(t *testing.T, events []protocol.Event) {
-	t.Helper()
-	if len(events) != 2 {
-		t.Fatalf("events = %d, want 2 (started + completed)", len(events))
-	}
-	if events[0].Type != protocol.TypeStarted || events[0].Sequence != 1 {
-		t.Errorf("first event = %q seq %d, want started/1",
-			events[0].Type, events[0].Sequence)
-	}
-	if events[1].Type != protocol.TypeCompleted || events[1].Sequence != 2 {
-		t.Errorf("second event = %q seq %d, want completed/2",
-			events[1].Type, events[1].Sequence)
-	}
+	return out
 }
 
 // completedPayloadOf decodes the completed event payload.
@@ -171,7 +203,9 @@ func completedPayloadOf(
 	ev protocol.Event,
 ) protocol.CompletedPayload {
 	t.Helper()
+
 	var cp protocol.CompletedPayload
+
 	if err := json.Unmarshal(ev.Payload, &cp); err != nil {
 		t.Fatalf("completed payload: %v", err)
 	}
@@ -194,6 +228,7 @@ func expectCompletionRecord(
 	prod *kafka.FakeProducer,
 	reqID string,
 	content string,
+	reasoning string,
 ) {
 	t.Helper()
 	comps := prod.RecordsFor(testTopics().Completed)
@@ -205,13 +240,17 @@ func expectCompletionRecord(
 		t.Fatalf("unmarshal completion: %v", err)
 	}
 	if comp.Content != content {
-		t.Errorf("completion content = %q", comp.Content)
+		t.Errorf("completion content = %q, want %q", comp.Content, content)
+	}
+	if comp.Reasoning != reasoning {
+		t.Errorf("completion reasoning = %q, want %q",
+			comp.Reasoning, reasoning)
 	}
 	if comp.Status != protocol.StatusCompleted {
 		t.Errorf("status = %q", comp.Status)
 	}
 	if comp.RequestID != reqID {
-		t.Errorf("request_id = %q", comp.RequestID)
+		t.Errorf("request_id = %q, want %q", comp.RequestID, reqID)
 	}
 	if string(comps[0].Key) != reqID {
 		t.Errorf("kafka key = %q, want request id", comps[0].Key)
@@ -230,10 +269,13 @@ func expectDLQRecord(
 	if len(dlq) != 1 {
 		t.Fatalf("dlq records = %d, want 1", len(dlq))
 	}
+
 	var dr protocol.DLQRecord
+
 	if err := json.Unmarshal(dlq[0].Value, &dr); err != nil {
 		t.Fatalf("dlq record: %v", err)
 	}
+
 	if dr.RequestID != reqID || dr.Attempt != attempt {
 		t.Errorf("dlq record = %+v", dr)
 	}
@@ -242,357 +284,518 @@ func expectDLQRecord(
 	}
 }
 
-func TestWorkerSuccessPublishesStartedAndCompleted(t *testing.T) {
-	top := testTopics()
-	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{resp: syncResponse("Hello world")}
-	w := newTestWorker(t, prod, prov, 2, 3)
+// eventTypes returns the event type column of an event list.
+func eventTypes(events []protocol.Event) []string {
+	out := make([]string, len(events))
 
-	err := w.process(context.Background(), testRequest("REQ1", "test-model"))
-	if err != nil {
-		t.Fatalf("process: %v", err)
+	for i, ev := range events {
+		out[i] = ev.Type
 	}
 
-	events := eventValues(t, prod, top.Events)
-	expectStartedAndCompleted(t, events)
-
-	cp := completedPayloadOf(t, events[1])
-	if cp.Content != "Hello world" {
-		t.Errorf("content = %q", cp.Content)
-	}
-	if cp.FinishReason != "stop" {
-		t.Errorf("finish_reason = %q", cp.FinishReason)
-	}
-	if cp.Usage == nil {
-		t.Error("usage missing in completed payload")
-	}
-
-	expectCompletionRecord(t, prod, "REQ1", "Hello world")
-
-	if len(prod.RecordsFor(top.Failed)) != 0 {
-		t.Error("failed records must be empty on success")
-	}
+	return out
 }
 
-func TestWorkerSequenceMonotonic(t *testing.T) {
-	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{resp: syncResponse("x")}
-	w := newTestWorker(t, prod, prov, 1, 1)
-
-	if err := w.process(context.Background(), testRequest("REQ2", "m")); err != nil {
-		t.Fatalf("process: %v", err)
+// expectEventSequence checks that event types and sequence numbers
+// match the wanted column exactly (sequences 1..N).
+func expectEventSequence(
+	t *testing.T,
+	events []protocol.Event,
+	want []string,
+) {
+	t.Helper()
+	if len(events) != len(want) {
+		t.Fatalf("events = %v, want %v", eventTypes(events), want)
 	}
 
-	var prev uint64
-	for _, ev := range eventValues(t, prod, testTopics().Events) {
-		if ev.Sequence <= prev {
-			t.Errorf("sequence not monotonic: %d after %d",
-				ev.Sequence, prev)
+	for i := range want {
+		if events[i].Type != want[i] || events[i].Sequence != uint64(i+1) {
+			t.Errorf("event %d = %q seq %d, want %q seq %d",
+				i, events[i].Type, events[i].Sequence, want[i], i+1)
 		}
-		prev = ev.Sequence
 	}
 }
 
-func TestWorkerNonRetryableFailure(t *testing.T) {
+// Raw SSE-чанки success-сценария (verbatim, как отдаёт provider).
+const (
+	chunkHello = `{"id":"c1","choices":[{"index":0,
+		"delta":{"role":"assistant","content":"Hello "}}]}`
+	chunkWorld = `{"id":"c1","choices":[{"index":0,
+		"delta":{"content":"world"}}]}`
+	chunkDone = `{"id":"c1","choices":[{"index":0,
+		"delta":{"reasoning_content":"thought"},
+		"finish_reason":"stop"}],
+		"usage":{"prompt_tokens":10,
+		"completion_tokens":5,"total_tokens":15}}`
+)
+
+// successScript — полный успешный streaming-поток.
+func successScript() []providers.ProviderEvent {
+	return []providers.ProviderEvent{
+		rawEvent(chunkHello),
+		rawEvent(chunkWorld),
+		rawEvent(chunkDone),
+		{Type: providers.EventDone},
+	}
+}
+
+// assertProviderRequest checks the request the provider received.
+func assertProviderRequest(t *testing.T, prov *fakeProvider) {
+	t.Helper()
+	last := prov.lastRequest()
+	if last.Model != "env-model" {
+		t.Errorf("model = %q, want env-model (envelope wins)", last.Model)
+	}
+	if !last.Stream {
+		t.Error("stream must be true on heavy path")
+	}
+	if len(last.Extra) == 0 {
+		t.Error("Extra must preserve the original request payload")
+	}
+}
+
+// assertCompletedPayload checks aggregated completed payload.
+func assertCompletedPayload(t *testing.T, cp protocol.CompletedPayload) {
+	t.Helper()
+	if cp.Content != "Hello world" {
+		t.Errorf("content = %q, want 'Hello world'", cp.Content)
+	}
+
+	if cp.Reasoning != "thought" {
+		t.Errorf("reasoning = %q, want 'thought'", cp.Reasoning)
+	}
+
+	if !cp.ReasoningAvailable {
+		t.Error("reasoning_available must be true")
+	}
+
+	if cp.FinishReason != "stop" {
+		t.Errorf("finish_reason = %q, want stop", cp.FinishReason)
+	}
+	if !cp.Stream {
+		t.Error("stream must be true in completed payload")
+	}
+	if cp.Events != 3 {
+		t.Errorf("events = %d, want 3", cp.Events)
+	}
+	if !strings.Contains(string(cp.Usage), `"total_tokens":15`) {
+		t.Errorf("usage = %s, want total_tokens 15", cp.Usage)
+	}
+}
+
+func TestWorkerSuccessStreamsRawEvents(t *testing.T) {
 	top := testTopics()
 	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{err: fmt.Errorf("%w: provider status 401",
-		providers.ErrNonRetryable)}
-	w := newTestWorker(t, prod, prov, 1, 3)
+	prov := &fakeProvider{script: successScript()}
+	w := newTestWorker(t, prod, prov, 2, 3, 0)
 
-	// Terminal failure is published, so process reports success to the
-	// consumer (offset can be committed).
-	err := w.process(context.Background(), testRequest("REQ3", "m"))
+	err := w.process(context.Background(), testRequest("REQ1", "env-model"))
 	if err != nil {
 		t.Fatalf("process: %v", err)
 	}
-	if prov.callCount() != 1 {
-		t.Errorf("provider calls = %d, want 1", prov.callCount())
+
+	if n := prov.callCount(); n != 1 {
+		t.Fatalf("provider calls = %d, want 1", n)
 	}
+
+	assertProviderRequest(t, prov)
 
 	events := eventValues(t, prod, top.Events)
-	if len(events) != 2 || events[1].Type != protocol.TypeFailed {
-		t.Fatalf("events = %+v, want started + failed", events)
+	expectEventSequence(t, events, []string{
+		protocol.TypeStarted,
+		protocol.TypeRawSSE,
+		protocol.TypeRawSSE,
+		protocol.TypeRawSSE,
+		protocol.TypeCompleted,
+	})
+
+	// Raw чанки сохраняются verbatim (PLAN §9).
+	var raw1 protocol.RawSSEPayload
+	if err := json.Unmarshal(events[1].Payload, &raw1); err != nil {
+		t.Fatalf("raw payload: %v", err)
+	}
+	if raw1.Data != chunkHello {
+		t.Errorf("raw data = %q, want verbatim chunk", raw1.Data)
 	}
 
-	fp := failedPayloadOf(t, events[1])
-	if fp.Retryable {
-		t.Error("401 failure must be non-retryable")
-	}
-	if fp.Attempt != 1 {
-		t.Errorf("attempt = %d, want 1", fp.Attempt)
-	}
+	assertCompletedPayload(t, completedPayloadOf(t, events[4]))
 
-	if len(prod.RecordsFor(top.Failed)) != 1 {
-		t.Errorf("failed records = %d, want 1",
-			len(prod.RecordsFor(top.Failed)))
+	expectCompletionRecord(t, prod, "REQ1", "Hello world", "thought")
+
+	if n := len(prod.RecordsFor(top.Failed)); n != 0 {
+		t.Errorf("failed records = %d, want 0", n)
 	}
-	if len(prod.RecordsFor(top.DLQ)) != 0 {
-		t.Errorf("dlq records = %d, want 0 for non-retryable",
-			len(prod.RecordsFor(top.DLQ)))
+	if n := len(prod.RecordsFor(top.DLQ)); n != 0 {
+		t.Errorf("dlq records = %d, want 0", n)
 	}
 }
 
-func TestWorkerRetryExhaustedPublishesDLQ(t *testing.T) {
+func TestWorkerNullContentAggregatesEmpty(t *testing.T) {
 	top := testTopics()
 	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{err: errors.New("connection refused")}
-	w := newTestWorker(t, prod, prov, 1, 2)
+	prov := &fakeProvider{script: []providers.ProviderEvent{
+		rawEvent(`{"id":"c1","choices":[{"index":0,"delta":{"content":null}}]}`),
+		{Type: providers.EventDone},
+	}}
+	w := newTestWorker(t, prod, prov, 1, 1, 0)
 
-	start := time.Now()
-	err := w.process(context.Background(), testRequest("REQ4", "m"))
-	if err != nil {
+	if err := w.process(context.Background(), testRequest("REQ1", "m")); err != nil {
 		t.Fatalf("process: %v", err)
-	}
-
-	// Two attempts: first fails, backoff, second fails and is terminal.
-	if prov.callCount() != 2 {
-		t.Errorf("provider calls = %d, want 2", prov.callCount())
-	}
-	if time.Since(start) < time.Second {
-		t.Errorf("expected ~2s backoff between attempts")
 	}
 
 	events := eventValues(t, prod, top.Events)
 	if len(events) != 3 {
-		t.Fatalf("events = %d, want 3 (started x2 + failed)", len(events))
+		t.Fatalf("events = %d, want 3", len(events))
 	}
 
+	cp := completedPayloadOf(t, events[2])
+	if cp.Content != "" {
+		t.Errorf("content = %q, want empty for null delta", cp.Content)
+	}
+}
+
+func TestWorkerUnknownRawEventPreserved(t *testing.T) {
+	top := testTopics()
+	prod := kafka.NewFakeProducer()
+	// Non-JSON raw line: aggregation must skip it, but the event
+	// must be preserved in the durable transcript.
+	prov := &fakeProvider{script: []providers.ProviderEvent{
+		rawEvent("provider-specific line"),
+		{Type: providers.EventDone},
+	}}
+	w := newTestWorker(t, prod, prov, 1, 1, 0)
+
+	if err := w.process(context.Background(), testRequest("REQ1", "m")); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	events := eventValues(t, prod, top.Events)
+	if len(events) != 3 {
+		t.Fatalf("events = %d, want 3", len(events))
+	}
+
+	var raw protocol.RawSSEPayload
+
+	if err := json.Unmarshal(events[1].Payload, &raw); err != nil {
+		t.Fatalf("raw payload: %v", err)
+	}
+	if raw.Data != "provider-specific line" {
+		t.Errorf("raw data = %q", raw.Data)
+	}
+	cp := completedPayloadOf(t, events[2])
+	if cp.Content != "" || cp.Reasoning != "" {
+		t.Errorf("aggregation of non-JSON chunk must be empty, got %+v", cp)
+	}
+}
+
+func TestWorkerSequenceMonotonicAcrossRetries(t *testing.T) {
+	top := testTopics()
+	prod := kafka.NewFakeProducer()
+	// Mid-stream retryable failure on every attempt.
+	prov := &fakeProvider{
+		script: []providers.ProviderEvent{
+			rawEvent(`{"id":"c1","choices":[{"index":0,"delta":{"content":"part "}}]}`),
+			{Type: providers.EventError, Err: errors.New("network reset")},
+		},
+		err: errors.New("network reset"),
+	}
+	w := newTestWorker(t, prod, prov, 2, 2, 0)
+
+	if err := w.process(context.Background(), testRequest("REQ1", "m")); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	if n := prov.callCount(); n != 2 {
+		t.Fatalf("provider calls = %d, want 2", n)
+	}
+
+	events := eventValues(t, prod, top.Events)
+	// started(1) raw(2) started(3) raw(4) failed(5)
+	expectEventSequence(t, events, []string{
+		protocol.TypeStarted,
+		protocol.TypeRawSSE,
+		protocol.TypeStarted,
+		protocol.TypeRawSSE,
+		protocol.TypeFailed,
+	})
+
+	fp := failedPayloadOf(t, events[len(events)-1])
+	if !fp.Retryable || fp.Attempt != 2 {
+		t.Errorf("failed payload = %+v, want retryable attempt 2", fp)
+	}
+
+	expectDLQRecord(t, prod, "REQ1", 2)
+}
+
+func TestWorkerEmptyStreamFails(t *testing.T) {
+	top := testTopics()
+	prod := kafka.NewFakeProducer()
+	prov := &fakeProvider{script: nil}
+	w := newTestWorker(t, prod, prov, 2, 2, 0)
+
+	if err := w.process(context.Background(), testRequest("REQ1", "m")); err != nil {
+		t.Fatalf("process: %v", err)
+	}
+
+	if n := prov.callCount(); n != 2 {
+		t.Fatalf("provider calls = %d, want 2", n)
+	}
+
+	events := eventValues(t, prod, top.Events)
+	if got := eventTypes(events); len(got) != 3 {
+		t.Fatalf("events = %v, want started, started, failed", got)
+	}
+	if events[2].Type != protocol.TypeFailed {
+		t.Errorf("last event = %q, want failed", events[2].Type)
+	}
 	fp := failedPayloadOf(t, events[2])
 	if !fp.Retryable {
-		t.Error("retryable error must stay retryable in failed payload")
-	}
-	if fp.Attempt != 2 {
-		t.Errorf("attempt = %d, want 2", fp.Attempt)
+		t.Error("empty stream must be retryable")
 	}
 
-	expectDLQRecord(t, prod, "REQ4", 2)
+	expectDLQRecord(t, prod, "REQ1", 2)
 }
 
-func TestWorkerContextCancelledDuringBackoff(t *testing.T) {
+func TestWorkerNonRetryableNoRetryNoDLQ(t *testing.T) {
 	top := testTopics()
 	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{err: errors.New("temporary failure")}
-	w := newTestWorker(t, prod, prov, 1, 3)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		cancel()
-	}()
-
-	err := w.process(ctx, testRequest("REQ5", "m"))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("err = %v, want context.Canceled", err)
+	prov := &fakeProvider{
+		err: fmt.Errorf("%w: provider status 401", providers.ErrNonRetryable),
 	}
+	w := newTestWorker(t, prod, prov, 2, 3, 0)
 
-	// Terminal failure must NOT be published on cancellation.
-	if len(prod.RecordsFor(top.Failed)) != 0 {
-		t.Error("failed records must be empty on cancellation")
-	}
-	if len(prod.RecordsFor(top.DLQ)) != 0 {
-		t.Error("dlq records must be empty on cancellation")
-	}
-}
-
-// failingProducer wraps FakeProducer and fails publishes on one topic.
-type failingProducer struct {
-	inner     *kafka.FakeProducer
-	failTopic string
-}
-
-func (p *failingProducer) Publish(
-	ctx context.Context,
-	topic string,
-	key string,
-	value []byte,
-) error {
-	if topic == p.failTopic {
-		return fmt.Errorf("injected publish failure on %s", topic)
-	}
-	return p.inner.Publish(ctx, topic, key, value)
-}
-
-func (p *failingProducer) Close() error { return p.inner.Close() }
-
-func TestWorkerFailedPublishFailureIsError(t *testing.T) {
-	inner := kafka.NewFakeProducer()
-	prod := &failingProducer{inner: inner, failTopic: testTopics().Failed}
-	prov := &fakeProvider{err: fmt.Errorf("%w: bad request",
-		providers.ErrNonRetryable)}
-	w := newTestWorker(t, prod, prov, 1, 3)
-
-	err := w.process(context.Background(), testRequest("REQ6", "m"))
-	if err == nil {
-		t.Fatal("expected error when failed topic publish fails")
-	}
-	if len(inner.RecordsFor(testTopics().DLQ)) != 0 {
-		t.Error("dlq must not be published when failed publish fails")
-	}
-}
-
-func TestWorkerUsesEnvelopeModel(t *testing.T) {
-	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{resp: syncResponse("ok")}
-	w := newTestWorker(t, prod, prov, 1, 1)
-
-	req := testRequest("REQ7", "envelope-model")
-	if err := w.process(context.Background(), req); err != nil {
+	if err := w.process(context.Background(), testRequest("REQ1", "m")); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 
-	got := prov.lastRequest()
-	if got == nil {
-		t.Fatal("provider was not called")
-	}
-	// The envelope model must win over the model inside the payload.
-	if got.Model != "envelope-model" {
-		t.Errorf("model = %q, want envelope-model", got.Model)
-	}
-	if got.Stream {
-		t.Error("worker must force stream=false")
-	}
-	if string(got.Extra) != string(req.Payload) {
-		t.Error("original payload must be preserved in Extra")
-	}
-	if len(got.Messages) != 1 || got.Messages[0].Role != "user" {
-		t.Errorf("messages = %+v", got.Messages)
-	}
-}
-
-func TestWorkerContentExtraction(t *testing.T) {
-	// Content null must produce an empty content string.
-	prod := kafka.NewFakeProducer()
-	resp := syncResponse("x")
-	resp.Choices[0].Message.Content = json.RawMessage("null")
-	prov := &fakeProvider{resp: resp}
-	w := newTestWorker(t, prod, prov, 1, 1)
-
-	if err := w.process(context.Background(), testRequest("REQ8", "m")); err != nil {
-		t.Fatalf("process: %v", err)
+	if n := prov.callCount(); n != 1 {
+		t.Fatalf("provider calls = %d, want 1 (no retry)", n)
 	}
 
-	events := eventValues(t, prod, testTopics().Events)
-	cp := completedPayloadOf(t, events[1])
-	if cp.Content != "" {
-		t.Errorf("content = %q, want empty for null content", cp.Content)
-	}
-}
-
-func TestWorkerNoChoicesIsRetryable(t *testing.T) {
-	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{resp: &protocol.ChatResponse{Choices: nil}}
-	w := newTestWorker(t, prod, prov, 1, 1)
-
-	err := w.process(context.Background(), testRequest("REQ9", "m"))
-	if err != nil {
-		t.Fatalf("process: %v", err)
-	}
-
-	// maxRetry=1: single attempt, terminal failure, retryable flag on.
-	events := eventValues(t, prod, testTopics().Events)
-	if len(events) != 2 || events[1].Type != protocol.TypeFailed {
-		t.Fatalf("events = %+v, want started + failed", events)
+	events := eventValues(t, prod, top.Events)
+	if got := eventTypes(events); len(got) != 2 {
+		t.Fatalf("events = %v, want started + failed", got)
 	}
 	fp := failedPayloadOf(t, events[1])
-	if !fp.Retryable {
-		t.Error("no-choices error must be retryable")
+	if fp.Retryable || fp.Attempt != 1 {
+		t.Errorf("failed payload = %+v, want non-retryable attempt 1", fp)
+	}
+
+	failed := prod.RecordsFor(top.Failed)
+	if len(failed) != 1 {
+		t.Fatalf("llm.failed records = %d, want 1", len(failed))
+	}
+	if len(prod.RecordsFor(top.DLQ)) != 0 {
+		t.Error("dlq records must be empty for non-retryable failure")
 	}
 }
 
-// fakeConsumer drives the worker handler with canned records.
-type fakeConsumer struct {
-	records []kafka.Record
-	// closeErr is returned by Consume after all records were handled.
-	closeErr error
-}
-
-func (c *fakeConsumer) Consume(
-	_ context.Context,
-	handler func(context.Context, kafka.Record) error,
-) error {
-	for _, rec := range c.records {
-		if err := handler(context.Background(), rec); err != nil {
-			return err
-		}
-	}
-	return c.closeErr
-}
-
-func (c *fakeConsumer) Close() error { return nil }
-
-func requestRecord(id string, value []byte) kafka.Record {
-	return kafka.Record{
-		Topic: "llm.requests",
-		Key:   []byte(id),
-		Value: value,
-	}
-}
-
-func TestRunInvalidRecordGoesToDLQ(t *testing.T) {
+func TestWorkerHeartbeatDuringSilentProvider(t *testing.T) {
 	top := testTopics()
 	prod := kafka.NewFakeProducer()
-	prov := &fakeProvider{resp: syncResponse("ok")}
-	w := newTestWorker(t, prod, prov, 1, 1)
+	prov := &fakeProvider{
+		script: []providers.ProviderEvent{
+			rawEvent(`{"id":"c1","choices":[{"index":0,"delta":{"content":"ok"}}]}`),
+		},
+		delay: 150 * time.Millisecond,
+	}
+	w := newTestWorker(t, prod, prov, 2, 3, 40*time.Millisecond)
 
-	// Malformed JSON must go to DLQ without blocking the consumer.
-	malformed := requestRecord("REQ-BAD", []byte("not-json"))
-	emptyID := requestRecord("",
-		[]byte(`{"provider":"heavy","model":"m","payload":{}}`))
-	valid := requestRecord("REQ-OK",
-		[]byte(`{"request_id":"REQ-OK","provider":"heavy",
-			"model":"m","payload":{"model":"m","messages":[]}}`))
+	if err := w.process(context.Background(), testRequest("REQ1", "m")); err != nil {
+		t.Fatalf("process: %v", err)
+	}
 
-	consumer := &fakeConsumer{records: []kafka.Record{malformed, emptyID, valid}}
+	events := eventValues(t, prod, top.Events)
+	var firstHBLastSeq uint64
+	hbCount := 0
 
-	err := w.Run(context.Background(), consumer)
+	for _, ev := range events {
+		if ev.Type != protocol.TypeHeartbeat {
+			continue
+		}
+
+		hbCount++
+
+		if hbCount == 1 {
+			var hb protocol.HeartbeatPayload
+
+			if err := json.Unmarshal(ev.Payload, &hb); err != nil {
+				t.Fatalf("heartbeat payload: %v", err)
+			}
+
+			firstHBLastSeq = hb.LastSequence
+		}
+	}
+	if hbCount < 1 {
+		t.Errorf("heartbeat count = %d, want >= 1 (provider silent 150ms, period 40ms)", hbCount)
+	}
+	if firstHBLastSeq != 1 {
+		t.Errorf("first heartbeat last_sequence = %d, want 1 (only started published)", firstHBLastSeq)
+	}
+}
+
+func TestWorkerContextCancelDuringBackoff(t *testing.T) {
+	prod := kafka.NewFakeProducer()
+	prov := &fakeProvider{err: errors.New("boom")}
+	w := newTestWorker(t, prod, prov, 2, 5, 0)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- w.process(ctx, testRequest("REQ1", "m"))
+	}()
+
+	time.Sleep(300 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("process did not return after cancel")
+	}
+
+	top := testTopics()
+	if len(prod.RecordsFor(top.Failed)) != 0 {
+		t.Error("failed records must be empty after cancel")
+	}
+	if len(prod.RecordsFor(top.DLQ)) != 0 {
+		t.Error("dlq records must be empty after cancel")
+	}
+}
+
+func TestWorkerFailedTopicPublishFailure(t *testing.T) {
+	top := testTopics()
+	prod := kafka.NewFakeProducer()
+	prov := &fakeProvider{
+		err: fmt.Errorf("%w: 401", providers.ErrNonRetryable),
+	}
+	w := newTestWorker(
+		t,
+		&failingProducer{inner: prod, failTopic: top.Failed},
+		prov,
+		2,
+		3,
+		0,
+	)
+
+	err := w.process(context.Background(), testRequest("REQ1", "m"))
+	if err == nil {
+		t.Fatal("process must fail when llm.failed publish fails")
+	}
+	if !strings.Contains(err.Error(), top.Failed) {
+		t.Errorf("err = %v, want mention of %s", err, top.Failed)
+	}
+	if len(prod.RecordsFor(top.DLQ)) != 0 {
+		t.Error("dlq records must be empty when failed publish fails")
+	}
+}
+
+func TestRunInvalidRecordsGoToDLQ(t *testing.T) {
+	top := testTopics()
+	prod := kafka.NewFakeProducer()
+	prov := &fakeProvider{script: []providers.ProviderEvent{
+		rawEvent(`{"id":"c1","choices":[{"index":0,"delta":{"content":"ok"}}]}`),
+	}}
+	w := newTestWorker(t, prod, prov, 2, 3, 0)
+
+	records := []kafka.Record{
+		{
+			Topic:     top.Requests,
+			Key:       []byte("bad-1"),
+			Value:     []byte("{invalid-json"),
+			Partition: 0,
+			Offset:    0,
+		},
+		{
+			Topic:     top.Requests,
+			Key:       []byte("bad-2"),
+			Value:     []byte(`{"request_id":""}`),
+			Partition: 0,
+			Offset:    1,
+		},
+		{
+			Topic:     top.Requests,
+			Key:       []byte("REQ-ok"),
+			Value:     mustMarshal(t, testRequest("REQ-ok", "m")),
+			Partition: 0,
+			Offset:    2,
+		},
+	}
+
+	err := w.Run(context.Background(), &fakeConsumer{records: records})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
+	// Two poison messages -> two DLQ records, both with attempt 0.
 	dlq := prod.RecordsFor(top.DLQ)
 	if len(dlq) != 2 {
 		t.Fatalf("dlq records = %d, want 2", len(dlq))
 	}
-	var dr protocol.DLQRecord
-	if err := json.Unmarshal(dlq[0].Value, &dr); err != nil {
-		t.Fatalf("dlq record: %v", err)
-	}
-	if dr.RequestID != "REQ-BAD" {
-		t.Errorf("dlq request id = %q", dr.RequestID)
-	}
-	if dr.Attempt != 0 {
-		t.Errorf("dlq attempt = %d, want 0 for malformed", dr.Attempt)
+
+	for i, r := range dlq {
+		var dr protocol.DLQRecord
+		if err := json.Unmarshal(r.Value, &dr); err != nil {
+			t.Fatalf("dlq record %d: %v", i, err)
+		}
+		if dr.Attempt != 0 {
+			t.Errorf("dlq record %d attempt = %d, want 0", i, dr.Attempt)
+		}
+		if len(dr.Original) == 0 {
+			t.Errorf("dlq record %d must keep the original payload", i)
+		}
 	}
 
-	// The valid record must be processed normally.
-	if len(prod.RecordsFor(top.Events)) != 2 {
-		t.Errorf("events for valid record = %d, want 2",
-			len(prod.RecordsFor(top.Events)))
+	// The valid record must still be processed.
+	if n := prov.callCount(); n != 1 {
+		t.Fatalf("provider calls = %d, want 1", n)
 	}
 }
 
 func TestRunHandlerErrorPropagates(t *testing.T) {
-	inner := kafka.NewFakeProducer()
-	prod := &failingProducer{inner: inner, failTopic: testTopics().Failed}
-	prov := &fakeProvider{err: fmt.Errorf("%w: bad request",
-		providers.ErrNonRetryable)}
-	w := newTestWorker(t, prod, prov, 1, 1)
+	top := testTopics()
+	prod := kafka.NewFakeProducer()
+	prov := &fakeProvider{
+		err: fmt.Errorf("%w: 401", providers.ErrNonRetryable),
+	}
+	w := newTestWorker(
+		t,
+		&failingProducer{inner: prod, failTopic: top.Failed},
+		prov,
+		2,
+		3,
+		0,
+	)
 
-	value, err := json.Marshal(testRequest("REQ-ERR", "m"))
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
+	records := []kafka.Record{
+		{
+			Topic:     top.Requests,
+			Key:       []byte("REQ1"),
+			Value:     mustMarshal(t, testRequest("REQ1", "m")),
+			Partition: 0,
+			Offset:    0,
+		},
 	}
 
-	consumer := &fakeConsumer{records: []kafka.Record{
-		requestRecord("REQ-ERR", value),
-	}}
-
-	err = w.Run(context.Background(), consumer)
+	err := w.Run(context.Background(), &fakeConsumer{records: records})
 	if err == nil {
-		t.Fatal("expected error: failed publish failure must propagate")
+		t.Fatal("Run must propagate handler error")
 	}
-	if !strings.Contains(err.Error(), testTopics().Failed) {
-		t.Errorf("err = %v, want mention of failed topic", err)
+	if !strings.Contains(err.Error(), top.Failed) {
+		t.Errorf("err = %v, want mention of %s", err, top.Failed)
 	}
+}
+
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	return b
 }

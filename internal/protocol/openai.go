@@ -218,6 +218,11 @@ type JobInfo struct {
 	UpdatedAt    string `json:"updated_at,omitempty"`
 	FinishReason string `json:"finish_reason,omitempty"`
 	Error        string `json:"error,omitempty"`
+	// Итоговый результат (async mode): заполняется после completed.
+	Content     string          `json:"content,omitempty"`
+	Reasoning   string          `json:"reasoning,omitempty"`
+	Usage       json.RawMessage `json:"usage,omitempty"`
+	ReasoningOK bool            `json:"reasoning_available"`
 }
 
 // JobAccepted is the response for async job creation.

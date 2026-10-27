@@ -1,36 +1,39 @@
 // Package worker implements the heavy LLM worker.
 //
-// Текущий MVP намеренно простой:
+// Модель (PLAN §8/§9/§14/§21/§55):
 //
-//     llm.requests
-//          |
-//          v
-//     Kafka consumer
-//          |
-//          v
-//     HTTP POST /chat/completions
-//          |
-//          | stream=false
-//          v
-//     JSON response
-//          |
-//          +----> llm.completed
-//          |
-//          +----> llm.events (terminal event для Gateway)
-//          |
-//          v
-//     MarkMessage()
+//	llm.requests
+//	     |
+//	     v
+//	Kafka consumer
+//	     |
+//	     v
+//	HTTP POST /chat/completions (stream=true)
+//	     |
+//	     v
+//	SSE stream от provider'а
+//	     |
+//	     +----> каждый чанк -> raw_sse event -> llm.events
+//	     +----> heartbeat (пока provider молчит) -> llm.events
+//	     |
+//	     v
+//	completed (после сохранённого последнего чанка, PLAN §31)
+//	     |
+//	     +----> llm.completed (агрегированный результат, PLAN §32)
+//	     |
+//	     v
+//	MarkMessage()
 //
-// В этой версии НЕТ:
+// Последствия:
 //
-//   - streaming;
-//   - reasoning aggregation;
-//   - raw SSE;
-//   - heartbeat events;
-//   - tool calls;
-//   - сложной event choreography.
-//
-// Всё это можно вернуть следующим этапом.
+//   - 30-минутная генерация выживает: события живут в Kafka,
+//     отключение клиента не останавливает генерацию (PLAN §21);
+//   - reasoning_content сохраняется как отдаёт provider (PLAN §8/§33);
+//   - оригинальные SSE-события не реконструируются (PLAN §9/§55) —
+//     llm.events является durable transcript генерации;
+//   - sequence монотонно растёт внутри request, в т.ч. между retries
+//     (PLAN §10);
+//   - heartbeat каждые HEAVY_HEARTBEAT секунд (PLAN §28, INV-005).
 package worker
 
 import (
@@ -39,7 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
+	"strings"
 	"time"
 
 	"github.com/kafka-llm-gateway/gateway/internal/kafka"
@@ -48,26 +51,30 @@ import (
 	"github.com/kafka-llm-gateway/gateway/internal/providers"
 )
 
-// SyncProvider is the minimal interface required by this worker.
+// StreamProvider is the minimal interface required by this worker.
 //
 // Worker не должен знать, как именно устроен HTTP client.
 //
 // Ему достаточно:
 //
-//     CompleteSync(ctx, request) -> response
+//	Complete(ctx, request, events) -> error
+//
+// где events — канал provider-событий (raw SSE-чанки), который
+// закрывается по завершении, а Complete возвращает итоговую ошибку.
 //
 // Сейчас реализация — heavy.Client.
-type SyncProvider interface {
-	CompleteSync(
+type StreamProvider interface {
+	Complete(
 		context.Context,
 		*providers.ChatRequest,
-	) (*protocol.ChatResponse, error)
+		chan<- providers.ProviderEvent,
+	) error
 }
 
 // Worker processes durable Kafka requests.
 type Worker struct {
 	producer kafka.EventProducer
-	provider SyncProvider
+	provider StreamProvider
 	topics   kafka.Topics
 
 	metrics *observability.Metrics
@@ -78,18 +85,23 @@ type Worker struct {
 
 	// Максимальное количество попыток одной Kafka request.
 	maxRetry int
+
+	// Период heartbeat-событий во время долгой генерации.
+	//
+	// Ноль/отрицательное значение отключает heartbeat.
+	heartbeat time.Duration
 }
 
 // New builds a worker.
 func New(
 	producer kafka.EventProducer,
-	provider SyncProvider,
+	provider StreamProvider,
 	topics kafka.Topics,
 	metrics *observability.Metrics,
 	log *slog.Logger,
 	workers int,
 	maxRetry int,
-	_ time.Duration, // heartbeat больше не нужен в non-streaming MVP
+	heartbeat time.Duration,
 ) *Worker {
 	if workers <= 0 {
 		workers = 2
@@ -107,8 +119,9 @@ func New(
 		metrics: metrics,
 		log:     log,
 
-		workers:  workers,
-		maxRetry: maxRetry,
+		workers:   workers,
+		maxRetry:  maxRetry,
+		heartbeat: heartbeat,
 	}
 }
 
@@ -215,7 +228,6 @@ func (w *Worker) Run(
 				sessionCtx,
 				req,
 			)
-
 			if err != nil {
 				// Если session была отменена из-за rebalance/shutdown,
 				// message НЕ помечаем.
@@ -250,6 +262,27 @@ func (w *Worker) Run(
 //     -> error
 //     -> offset НЕ MarkMessage
 //     -> Kafka retry.
+// seqCounter выдаёт монотонные sequence-номера для одного request.
+//
+// Sequence 0 зарезервирован за queued-событием Gateway.
+//
+// Счётчик живёт дольше одной попытки: при retry номера продолжаются,
+// поэтому llm.events остаётся монотонным (PLAN §10), а Gateway
+// корректно дедуплицирует redelivery.
+type seqCounter struct {
+	n uint64
+}
+
+func (c *seqCounter) next() uint64 {
+	c.n++
+
+	return c.n
+}
+
+func (c *seqCounter) current() uint64 {
+	return c.n
+}
+
 func (w *Worker) process(
 	ctx context.Context,
 	req protocol.Request,
@@ -258,15 +291,17 @@ func (w *Worker) process(
 
 	attempt := req.Attempt
 
+	seq := &seqCounter{}
+
 	for {
 		attempt++
 
-		_, err := w.runOnce(
+		err := w.runOnce(
 			ctx,
 			req,
 			attempt,
+			seq,
 		)
-
 		if err == nil {
 			w.metricsCompleted(req.Provider, start)
 
@@ -301,6 +336,7 @@ func (w *Worker) process(
 				req,
 				attempt,
 				err,
+				seq,
 			)
 		}
 
@@ -318,6 +354,7 @@ func (w *Worker) process(
 				req,
 				attempt,
 				err,
+				seq,
 			)
 		}
 
@@ -344,12 +381,10 @@ func (w *Worker) process(
 	}
 }
 
-// runOnce performs one non-streaming LLM request.
-func (w *Worker) runOnce(
-	ctx context.Context,
+// buildProviderRequest строит provider-запрос из Kafka-огибающего.
+func (w *Worker) buildProviderRequest(
 	req protocol.Request,
-	attempt int,
-) (*protocol.ChatResponse, error) {
+) (*providers.ChatRequest, error) {
 	var chatReq protocol.ChatRequest
 
 	if err := json.Unmarshal(
@@ -362,16 +397,8 @@ func (w *Worker) runOnce(
 		)
 	}
 
-	// Kafka envelope содержит authoritative model.
-	//
-	// Не доверяем model из payload, если Gateway уже выбрал
-	// конкретную модель.
-	chatReq.Model = req.Model
-
-	// Для текущего MVP worker всегда использует non-streaming.
-	chatReq.Stream = false
-
 	// providers.ChatRequest используется только как internal DTO.
+	//
 	// Extra сохраняет оригинальный JSON request, включая:
 	//
 	// temperature
@@ -379,11 +406,15 @@ func (w *Worker) runOnce(
 	// top_p
 	// и т.д.
 	providerReq := &providers.ChatRequest{
-		Model:    req.Model,
-		Stream:   false,
-		Extra:    req.Payload,
+		Model:  req.Model,
+		Stream: true,
+		Extra:  req.Payload,
 	}
 
+	// Kafka envelope содержит authoritative model.
+	//
+	// Не доверяем model из payload, если Gateway уже выбрал
+	// конкретную модель.
 	for _, message := range chatReq.Messages {
 		content := string(message.Content)
 
@@ -405,6 +436,94 @@ func (w *Worker) runOnce(
 		)
 	}
 
+	return providerReq, nil
+}
+
+// streamAggregation incrementally строит итоговый результат из
+// raw-чанков provider'а (PLAN §32/§33).
+//
+// Raw-чанки при этом НЕ реконструируются: они сохраняются в
+// llm.events как есть (PLAN §9/§55), агрегат — служебный.
+type streamAggregation struct {
+	content   strings.Builder
+	reasoning strings.Builder
+	usage     json.RawMessage
+	finish    string
+	rawEvents uint64
+}
+
+// providerChunk — минимальный срез OpenAI-compatible чанка для
+// агрегации content/reasoning/usage/finish_reason.
+type providerChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content          *string `json:"content"`
+			ReasoningContent *string `json:"reasoning_content"`
+		} `json:"delta"`
+		FinishReason *string `json:"finish_reason"`
+	} `json:"choices"`
+	Usage *protocol.Usage `json:"usage"`
+}
+
+// absorb обновляет агрегат по одному raw-чанку.
+//
+// Непарсируемый чанк не ломает поток: он всё равно сохранён в
+// llm.events, агрегация просто пропускает его.
+func (a *streamAggregation) absorb(raw string) {
+	a.rawEvents++
+
+	var chunk providerChunk
+
+	if err := json.Unmarshal([]byte(raw), &chunk); err != nil {
+		return
+	}
+
+	for i := range chunk.Choices {
+		c := &chunk.Choices[i]
+
+		if c.Delta.Content != nil {
+			a.content.WriteString(*c.Delta.Content)
+		}
+
+		// reasoning_content сохраняется как provider-provided field
+		// (PLAN §33): Gateway не «извлекает мысли» из текста сам.
+		if c.Delta.ReasoningContent != nil {
+			a.reasoning.WriteString(*c.Delta.ReasoningContent)
+		}
+
+		if c.FinishReason != nil && *c.FinishReason != "" {
+			a.finish = *c.FinishReason
+		}
+	}
+
+	// usage приходит в финальном чанке (stream_options include_usage)
+	// или не приходит вовсе — тогда остаётся пустым.
+	if chunk.Usage != nil {
+		a.usage, _ = json.Marshal(chunk.Usage)
+	}
+}
+
+// runOnce выполняет одну попытку streaming-генерации.
+//
+// Публикует в llm.events:
+//
+//	started
+//	raw_sse    (по одному на каждый чанк provider'а, в порядке provider'а)
+//	heartbeat  (если provider молчит дольше w.heartbeat)
+//	completed  (после сохранённого последнего чанка, PLAN §31)
+//
+// Sequence-номера продолжают расти между попытками (PLAN §10).
+func (w *Worker) runOnce(
+	ctx context.Context,
+	req protocol.Request,
+	attempt int,
+	seq *seqCounter,
+) error {
+	providerReq, err := w.buildProviderRequest(req)
+	if err != nil {
+		return err
+	}
+
 	if w.metrics != nil {
 		w.metrics.RequestsActive.Inc()
 		defer w.metrics.RequestsActive.Dec()
@@ -412,146 +531,209 @@ func (w *Worker) runOnce(
 
 	startedAt := time.Now().UTC()
 
-	// Публикуем started event.
+	// Публикуем started event на каждой попытке.
 	//
 	// Gateway может перевести job:
 	//
 	// queued -> running
 	//
-	// Event sequence 0 оставляем за queued,
-	// поэтому started получает sequence 1,
-	// completed получает sequence 2.
+	// Sequence 0 за queued оставляет Gateway, started получает
+	// следующий номер (обычно 1).
 	if err := w.publishEvent(
 		ctx,
 		req,
-		1,
+		seq.next(),
 		protocol.TypeStarted,
 		protocol.StartedPayload{
 			Provider: req.Provider,
 			Model:    req.Model,
 		},
 	); err != nil {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"publish started event: %w",
 			err,
 		)
 	}
 
-	// Основной HTTP вызов к heavy LLM.
-	response, err := w.provider.CompleteSync(
-		ctx,
-		providerReq,
-	)
-	if err != nil {
-		return nil, err
-	}
+	events := make(chan providers.ProviderEvent, 64)
+	providerErr := make(chan error, 1)
 
-	if len(response.Choices) == 0 {
-		return nil, errors.New(
-			"LLM response contains no choices",
+	// Provider живёт в отдельной goroutine: Complete возвращает
+	// только после конца потока и гарантированно закрывает канал.
+	//
+	// При раннем выходе (ошибка публикации/Kafka) goroutine живёт
+	// до конца HTTP-запроса provider'а, который ограничен
+	// GenerationTimeout — это допустимая утечка на редкий сбой.
+	go func() {
+		providerErr <- w.provider.Complete(
+			ctx,
+			providerReq,
+			events,
 		)
+	}()
+
+	agg := &streamAggregation{}
+
+	var heartbeatC <-chan time.Time
+
+	if w.heartbeat > 0 {
+		ticker := time.NewTicker(w.heartbeat)
+		defer ticker.Stop()
+
+		heartbeatC = ticker.C
 	}
 
-	choice := response.Choices[0]
+	if err := w.consumeStream(
+		ctx,
+		req,
+		seq,
+		agg,
+		events,
+		heartbeatC,
+	); err != nil {
+		return err
+	}
 
-	content := ""
+	// Ожидаем финальную ошибку provider'а.
+	if err := <-providerErr; err != nil {
+		return fmt.Errorf("provider stream: %w", err)
+	}
 
-	// protocol.ChatMessage.Content — json.RawMessage.
-	//
-	// В стандартном OpenAI-compatible response это:
-	//
-	//     "content": "text"
-	//
-	// Но некоторые серверы могут вернуть null/object.
-	if len(choice.Message.Content) > 0 &&
-		string(choice.Message.Content) != "null" {
+	if agg.rawEvents == 0 {
+		// Пустой поток — та же семантика, что и legacy
+		// "response contains no choices": retryable ошибка.
+		return errors.New("provider returned empty stream")
+	}
 
-		var text string
+	if err := w.publishCompletion(
+		ctx,
+		req,
+		seq,
+		startedAt,
+		agg,
+	); err != nil {
+		return err
+	}
 
-		if err := json.Unmarshal(
-			choice.Message.Content,
-			&text,
-		); err == nil {
-			content = text
-		} else {
-			// Если content не string, сохраняем JSON как есть.
-			content = string(choice.Message.Content)
+	w.observeTokens(agg.usage)
+
+	return nil
+}
+
+// consumeStream перекачивает provider-события в llm.events до конца
+// потока, публикуя heartbeat во время пауз (INV-005).
+func (w *Worker) consumeStream(
+	ctx context.Context,
+	req protocol.Request,
+	seq *seqCounter,
+	agg *streamAggregation,
+	events <-chan providers.ProviderEvent,
+	heartbeatC <-chan time.Time,
+) error {
+loop:
+	for {
+		select {
+		case ev, ok := <-events:
+			if !ok {
+				break loop
+			}
+
+			if err := w.handleProviderEvent(
+				ctx,
+				req,
+				seq,
+				agg,
+				ev,
+			); err != nil {
+				return err
+			}
+
+		case <-heartbeatC:
+			// Heartbeat: job жив, provider молчит. Держит живыми
+			// SSE-соединения и прокси с таймаутами.
+			//
+			// LastSequence — последнее СОДЕРЖАНИЕ-событие до этого
+			// heartbeat (heartbeat получает следующий номер сам).
+			last := seq.current()
+
+			if err := w.publishEvent(
+				ctx,
+				req,
+				last+1,
+				protocol.TypeHeartbeat,
+				protocol.HeartbeatPayload{
+					LastSequence: last,
+				},
+			); err != nil {
+				return err
+			}
+
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
-	finishReason := ""
+	return nil
+}
 
-	if choice.FinishReason != nil {
-		finishReason = *choice.FinishReason
-	}
-
-	if finishReason == "" {
-		finishReason = "stop"
-	}
-
-	var usage json.RawMessage
-
-	if response.Usage != nil {
-		b, err := json.Marshal(response.Usage)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"marshal usage: %w",
-				err,
-			)
-		}
-
-		usage = b
-	}
-
+// publishCompletion пишет terminal completed event и агрегат в
+// llm.completed (PLAN §31/§32).
+func (w *Worker) publishCompletion(
+	ctx context.Context,
+	req protocol.Request,
+	seq *seqCounter,
+	startedAt time.Time,
+	agg *streamAggregation,
+) error {
 	completedAt := time.Now().UTC()
 
 	payload := protocol.CompletedPayload{
-		FinishReason:       finishReason,
-		Usage:              usage,
-		Content:            content,
-		Reasoning:          "",
-		ReasoningAvailable: false,
-		Events:             2,
-		DurationMS:         time.Since(startedAt).Milliseconds(),
+		FinishReason:       agg.finish,
+		Usage:              agg.usage,
+		Content:            agg.content.String(),
+		Reasoning:          agg.reasoning.String(),
+		ReasoningAvailable: agg.reasoning.Len() > 0,
+		Stream:             true,
+		Events:             agg.rawEvents,
+		DurationMS:         completedAt.Sub(startedAt).Milliseconds(),
 	}
 
 	// Terminal event в llm.events.
 	//
-	// Именно его сейчас читает Gateway.
-	//
-	// Поэтому Gateway не обязан читать llm.completed для live response.
+	// Публикуется ПОСЛЕ того, как последний чанк сохранён в Kafka
+	// (PLAN §31), поэтому Gateway не обязан читать llm.completed
+	// для live response.
 	if err := w.publishEvent(
 		ctx,
 		req,
-		2,
+		seq.next(),
 		protocol.TypeCompleted,
 		payload,
 	); err != nil {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"publish completed event: %w",
 			err,
 		)
 	}
 
-	// Aggregate result в llm.completed.
-	//
-	// Это уже не event log, а готовый результат для downstream services.
+	// Aggregate result в llm.completed — готовый результат
+	// для downstream services (PLAN §32).
 	completion := protocol.Completion{
 		RequestID:   req.RequestID,
 		Status:      protocol.StatusCompleted,
 		Provider:    req.Provider,
 		Model:       req.Model,
-		Content:     content,
-		Reasoning:   "",
-		Usage:       usage,
-		Events:      2,
+		Content:     agg.content.String(),
+		Reasoning:   agg.reasoning.String(),
+		Usage:       agg.usage,
+		Events:      agg.rawEvents,
 		StartedAt:   startedAt,
 		CompletedAt: completedAt,
 	}
 
 	data, err := json.Marshal(completion)
 	if err != nil {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"marshal completion: %w",
 			err,
 		)
@@ -563,13 +745,93 @@ func (w *Worker) runOnce(
 		req.RequestID,
 		data,
 	); err != nil {
-		return nil, fmt.Errorf(
+		return fmt.Errorf(
 			"publish completion: %w",
 			err,
 		)
 	}
 
-	return response, nil
+	return nil
+}
+
+// handleProviderEvent обрабатывает одно provider-событие:
+// сохраняет его в llm.events и обновляет агрегат.
+func (w *Worker) handleProviderEvent(
+	ctx context.Context,
+	req protocol.Request,
+	seq *seqCounter,
+	agg *streamAggregation,
+	ev providers.ProviderEvent,
+) error {
+	switch ev.Type {
+	case providers.EventRawSSE:
+		if err := w.publishRaw(ctx, req, seq, ev.Raw); err != nil {
+			return err
+		}
+
+		agg.absorb(ev.Raw)
+
+	case providers.EventDone:
+		// Provider сигнализировал конец потока;
+		// итоговая ошибка (если есть) придёт от Complete.
+
+	case providers.EventError:
+		// Provider уже вернул (или вернёт) эту ошибку;
+		// обработка — после цикла.
+
+	default:
+		// Неизвестное provider-specific событие: сохраняем его raw,
+		// чтобы llm.events оставался полным транскриптом (PLAN §28).
+		if ev.Raw == "" {
+			return nil
+		}
+
+		if err := w.publishRaw(ctx, req, seq, ev.Raw); err != nil {
+			return err
+		}
+
+		agg.absorb(ev.Raw)
+	}
+
+	return nil
+}
+
+// publishRaw сохраняет raw-чанк provider'а в llm.events как есть.
+func (w *Worker) publishRaw(
+	ctx context.Context,
+	req protocol.Request,
+	seq *seqCounter,
+	raw string,
+) error {
+	return w.publishEvent(
+		ctx,
+		req,
+		seq.next(),
+		protocol.TypeRawSSE,
+		protocol.RawSSEPayload{Data: raw},
+	)
+}
+
+// observeTokens обновляет token-счётчики по usage от provider'а.
+func (w *Worker) observeTokens(usage json.RawMessage) {
+	if w.metrics == nil || len(usage) == 0 {
+		return
+	}
+
+	var u protocol.Usage
+
+	if err := json.Unmarshal(usage, &u); err != nil {
+		return
+	}
+
+	w.metrics.TokensTotal.WithLabelValues("prompt").
+		Add(float64(u.PromptTokens))
+	w.metrics.TokensTotal.WithLabelValues("completion").
+		Add(float64(u.CompletionTokens))
+	w.metrics.TokensTotal.WithLabelValues("total").
+		Add(float64(u.TotalTokens))
+
+	w.metrics.OutputTokens.Add(float64(u.CompletionTokens))
 }
 
 // publishEvent writes an event to llm.events.
@@ -622,6 +884,7 @@ func (w *Worker) publishFailed(
 	req protocol.Request,
 	attempt int,
 	providerErr error,
+	seq *seqCounter,
 ) error {
 	retryable := providers.IsRetryable(
 		providerErr,
@@ -633,11 +896,12 @@ func (w *Worker) publishFailed(
 		Attempt:   attempt,
 	}
 
-	// Sequence 2 соответствует terminal event после started.
+	// Terminal event получает следующий номер: после started и всех
+	// raw/heartbeat-событий последней попытки (PLAN §10).
 	if err := w.publishEvent(
 		ctx,
 		req,
-		2,
+		seq.next(),
 		protocol.TypeFailed,
 		payload,
 	); err != nil {
@@ -738,6 +1002,7 @@ func (w *Worker) publishDLQ(
 			"request_id", req.RequestID,
 			"err", err,
 		)
+
 		return
 	}
 
@@ -889,20 +1154,18 @@ func (w *Worker) metricsCompleted(
 
 // Compile-time assertion.
 //
-// Если heavy.Client перестанет реализовывать SyncProvider,
+// Если heavy.Client перестанет реализовывать StreamProvider,
 // проект не соберётся.
-var _ SyncProvider = (*syncProviderCompileCheck)(nil)
+var _ StreamProvider = (*streamProviderCompileCheck)(nil)
 
-// syncProviderCompileCheck существует только для документации интерфейса.
-// Реальный provider передаётся из cmd/worker.
-type syncProviderCompileCheck struct{}
+// streamProviderCompileCheck существует только для документации
+// интерфейса. Реальный provider передаётся из cmd/worker.
+type streamProviderCompileCheck struct{}
 
-func (*syncProviderCompileCheck) CompleteSync(
+func (*streamProviderCompileCheck) Complete(
 	context.Context,
 	*providers.ChatRequest,
-) (*protocol.ChatResponse, error) {
-	return nil, nil
+	chan<- providers.ProviderEvent,
+) error {
+	return nil
 }
-
-// Защищаемся от случайного удаления sync import'ов в будущем.
-var _ = sync.Mutex{}

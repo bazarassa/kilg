@@ -23,6 +23,10 @@ func jobInfo(j *jobs.Job) protocol.JobInfo {
 		UpdatedAt:    j.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		FinishReason: j.FinishReason,
 		Error:        j.Error,
+		Content:      j.Content,
+		Reasoning:    j.Reasoning,
+		Usage:        j.Usage,
+		ReasoningOK:  j.ReasoningAvailable,
 	}
 }
 

@@ -66,8 +66,14 @@ type CompletedPayload struct {
 	Content            string          `json:"content,omitempty"`
 	Reasoning          string          `json:"reasoning,omitempty"`
 	ReasoningAvailable bool            `json:"reasoning_available"`
-	Events             uint64          `json:"events"`
-	DurationMS         int64           `json:"duration_ms"`
+	// Stream сообщает, что content/reasoning уже доставлены клиенту
+	// как raw SSE-события (streaming-режим worker). Gateway не должен
+	// повторно отправлять агрегированный content в этом случае.
+	Stream bool `json:"stream,omitempty"`
+	// Events — количество raw-событий, опубликованных в llm.events.
+	Events uint64 `json:"events"`
+	// DurationMS — длительность генерации в миллисекундах.
+	DurationMS int64 `json:"duration_ms"`
 }
 
 // FailedPayload is emitted when a job cannot be completed.
