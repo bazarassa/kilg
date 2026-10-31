@@ -4,7 +4,7 @@
 //
 // В текущем MVP worker использует non-streaming CompleteSync():
 //
-//     Kafka -> Worker -> Heavy -> HTTP -> JSON -> Worker -> Kafka
+//	Kafka -> Worker -> Heavy -> HTTP -> JSON -> Worker -> Kafka
 //
 // Позже сюда можно вернуть streaming Complete(), reasoning,
 // tool calls и т.д. — это не требуется для текущего этапа.

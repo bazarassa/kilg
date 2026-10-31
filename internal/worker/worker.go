@@ -129,7 +129,7 @@ func New(
 //
 // Важнейшее отличие от старой реализации:
 //
-//     handler НЕ запускает process() в detached goroutine.
+//	handler НЕ запускает process() в detached goroutine.
 //
 // Он ждёт завершения process().
 //
@@ -138,9 +138,9 @@ func New(
 // При этом semaphore всё равно позволяет обрабатывать несколько
 // partition параллельно:
 //
-//     partition 0 -> worker slot 1
-//     partition 1 -> worker slot 2
-//     partition 2 -> ждёт свободный slot
+//	partition 0 -> worker slot 1
+//	partition 1 -> worker slot 2
+//	partition 2 -> ждёт свободный slot
 //
 // Для текущих 3 Kafka partitions и HEAVY_WORKERS=2 это именно
 // ожидаемая модель.
@@ -250,18 +250,22 @@ func (w *Worker) Run(
 // Семантика:
 //
 // provider success
-//     -> completed
-//     -> nil
+//
+//	-> completed
+//	-> nil
 //
 // provider failure
-//     -> retry if retryable
-//     -> failed + optional DLQ after maxRetry
-//     -> nil, если terminal failure успешно опубликован
+//
+//	-> retry if retryable
+//	-> failed + optional DLQ after maxRetry
+//	-> nil, если terminal failure успешно опубликован
 //
 // Ошибка публикации terminal result
-//     -> error
-//     -> offset НЕ MarkMessage
-//     -> Kafka retry.
+//
+//	-> error
+//	-> offset НЕ MarkMessage
+//	-> Kafka retry.
+//
 // seqCounter выдаёт монотонные sequence-номера для одного request.
 //
 // Sequence 0 зарезервирован за queued-событием Gateway.

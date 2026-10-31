@@ -3,28 +3,28 @@
 //
 // Важный принцип этого пакета:
 //
-//   Kafka message -> handler -> успешное завершение обработки -> MarkMessage
+//	Kafka message -> handler -> успешное завершение обработки -> MarkMessage
 //
 // Мы НЕ считаем Kafka-сообщение обработанным в момент его чтения.
 //
 // Для worker это особенно важно:
 //
-//   1. прочитали llm.requests;
-//   2. вызвали LLM;
-//   3. записали llm.completed / llm.failed;
-//   4. только после этого MarkMessage.
+//  1. прочитали llm.requests;
+//  2. вызвали LLM;
+//  3. записали llm.completed / llm.failed;
+//  4. только после этого MarkMessage.
 //
 // Таким образом мы получаем at-least-once semantics.
 //
 // Возможный duplicate после crash/rebalance всё равно возможен:
 //
-//   LLM успешно ответил
-//       |
-//       +--> llm.completed записан
-//       |
-//       X worker умер до commit offset
-//       |
-//       +--> Kafka отдаст request повторно
+//	LLM успешно ответил
+//	    |
+//	    +--> llm.completed записан
+//	    |
+//	    X worker умер до commit offset
+//	    |
+//	    +--> Kafka отдаст request повторно
 //
 // Поэтому request_id должен использоваться как correlation/idempotency key.
 package kafka
@@ -70,9 +70,10 @@ type Record struct {
 // Worker должен передать этот context дальше:
 //
 // Kafka session
-//     -> worker handler
-//         -> process()
-//             -> HTTP request to LLM
+//
+//	-> worker handler
+//	    -> process()
+//	        -> HTTP request to LLM
 //
 // В результате rebalance может корректно отменить HTTP request.
 type EventConsumer interface {
@@ -146,7 +147,7 @@ func NewProducerWithRewrite(brokers []string, rewrite string) (*Producer, error)
 //
 // Поэтому для вызывающего кода:
 //
-//     Publish(...) == nil
+//	Publish(...) == nil
 //
 // означает, что Kafka producer получил подтверждение успешной публикации.
 //
@@ -233,29 +234,29 @@ func (c *Consumer) SetRewrite(spec string) {
 //
 // Важный lifecycle:
 //
-//   Consume()
-//      |
-//      +--> Kafka ConsumerGroup session
-//              |
-//              +--> ConsumeClaim()
-//                      |
-//                      +--> handler(session.Context(), record)
-//                              |
-//                              +--> nil
-//                                      |
-//                                      +--> MarkMessage()
+//	Consume()
+//	   |
+//	   +--> Kafka ConsumerGroup session
+//	           |
+//	           +--> ConsumeClaim()
+//	                   |
+//	                   +--> handler(session.Context(), record)
+//	                           |
+//	                           +--> nil
+//	                                   |
+//	                                   +--> MarkMessage()
 //
 // Если handler вернул ошибку:
 //
-//     handler()
-//         |
-//         +--> error
-//                 |
-//                 +--> NO MarkMessage
-//                 |
-//                 +--> session завершается
-//                 |
-//                 +--> Kafka message будет доступен повторно
+//	handler()
+//	    |
+//	    +--> error
+//	            |
+//	            +--> NO MarkMessage
+//	            |
+//	            +--> session завершается
+//	            |
+//	            +--> Kafka message будет доступен повторно
 //
 // Это сознательная at-least-once semantics.
 func (c *Consumer) Consume(
@@ -461,8 +462,8 @@ func (h *sessionHandler) Cleanup(
 //
 // Если вынести обработку сообщения в goroutine:
 //
-//     go handler(msg)
-//     return nil
+//	go handler(msg)
+//	return nil
 //
 // Sarama сможет завершить session/rebalance и commit offsets,
 // пока goroutine ещё работает.

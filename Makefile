@@ -87,7 +87,7 @@ docs: .install-swag ## Generating Swagger documentation
 	}
 	@echo "Generating Swagger documentation..."
 	@mkdir -p "$(PROJECT_DOCS)"
-	"$(SWAG_BIN)" init -g cmd/gateway/main.go -o "$(PROJECT_DOCS)"
+	"$(SWAG_BIN)" init -g cmd/gateway/main.go -o "$(PROJECT_DOCS)" --parseInternal --parseDepth 2
 
 # Serve Swagger UI locally (Опционально не тестировалось)
 .PHONY: swagger

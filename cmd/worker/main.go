@@ -101,7 +101,7 @@ func main() {
 	)
 
 	httpServer := &http.Server{
-		Addr: cfg.WorkerHTTPAddr,
+		Addr:    cfg.WorkerHTTPAddr,
 		Handler: mux,
 
 		ReadHeaderTimeout: 10 * time.Second,

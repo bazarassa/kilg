@@ -20,7 +20,7 @@ import (
 //
 //  1. Kafka-backed route:
 //     Gateway -> llm.requests -> Worker -> LLM
-//             -> llm.events -> Gateway -> SSE client
+//     -> llm.events -> Gateway -> SSE client
 //
 //  2. Direct provider route:
 //     Gateway -> Provider -> SSE client
@@ -508,25 +508,25 @@ func (s *Server) streamJob(
 //
 // Kafka event flow:
 //
-//     llm.events
-//          |
-//          v
-//     RunEventConsumer
-//          |
-//          v
-//     Dispatcher.Dispatch()
-//          |
-//          v
-//     stream.Ch
-//          |
-//          v
-//     streamJobWith()
-//          |
-//          v
-//     writeEvent()
-//          |
-//          v
-//     SSE client
+//	llm.events
+//	     |
+//	     v
+//	RunEventConsumer
+//	     |
+//	     v
+//	Dispatcher.Dispatch()
+//	     |
+//	     v
+//	stream.Ch
+//	     |
+//	     v
+//	streamJobWith()
+//	     |
+//	     v
+//	writeEvent()
+//	     |
+//	     v
+//	SSE client
 func (s *Server) streamJobWith(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -637,184 +637,184 @@ func (s *Server) streamJobWith(
 
 // streamDirect runs a direct provider and streams raw SSE to the client.
 func (s *Server) streamDirect(
-w http.ResponseWriter,
-r *http.Request,
-requestID string,
-route router.Route,
-req protocol.ChatRequest,
-rawBody []byte,
+	w http.ResponseWriter,
+	r *http.Request,
+	requestID string,
+	route router.Route,
+	req protocol.ChatRequest,
+	rawBody []byte,
 ) {
-flusher, ok := w.(http.Flusher)
-if !ok {
-writeJSONError(
-w,
-http.StatusInternalServerError,
-"streaming unsupported",
-)
-return
-}
-
-prov, ok := s.providers[route.Provider]
-if !ok {
-	writeJSONError(
-		w,
-		http.StatusBadGateway,
-		"provider not configured: "+route.Provider,
-	)
-	return
-}
-
-streaming.SSEHeaders(w)
-w.WriteHeader(http.StatusOK)
-flusher.Flush()
-
-s.jobs.Ensure(
-	requestID,
-	route.Provider,
-	route.Model,
-)
-
-s.jobs.Update(
-	requestID,
-	func(j *jobs.Job) {
-		j.Status = protocol.StatusRunning
-	},
-)
-
-s.metrics.RequestsTotal.
-	WithLabelValues(
-		route.Provider,
-		"started",
-	).
-	Inc()
-
-pReq := &providers.ChatRequest{
-	Model:  route.Model,
-	Stream: req.Stream,
-	Extra:  rawBody,
-}
-
-for _, m := range req.Messages {
-	content := string(m.Content)
-
-	var str string
-	if json.Unmarshal(
-		m.Content,
-		&str,
-	) == nil {
-		content = str
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSONError(
+			w,
+			http.StatusInternalServerError,
+			"streaming unsupported",
+		)
+		return
 	}
 
-	pReq.Messages = append(
-		pReq.Messages,
-		providers.Message{
-			Role:    m.Role,
-			Content: content,
+	prov, ok := s.providers[route.Provider]
+	if !ok {
+		writeJSONError(
+			w,
+			http.StatusBadGateway,
+			"provider not configured: "+route.Provider,
+		)
+		return
+	}
+
+	streaming.SSEHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	s.jobs.Ensure(
+		requestID,
+		route.Provider,
+		route.Model,
+	)
+
+	s.jobs.Update(
+		requestID,
+		func(j *jobs.Job) {
+			j.Status = protocol.StatusRunning
 		},
 	)
-}
 
-events := make(chan providers.ProviderEvent, 64)
+	s.metrics.RequestsTotal.
+		WithLabelValues(
+			route.Provider,
+			"started",
+		).
+		Inc()
 
-done := make(chan error, 1)
+	pReq := &providers.ChatRequest{
+		Model:  route.Model,
+		Stream: req.Stream,
+		Extra:  rawBody,
+	}
 
-go func() {
-	done <- prov.Complete(
-		r.Context(),
-		pReq,
-		events,
-	)
-}()
+	for _, m := range req.Messages {
+		content := string(m.Content)
 
-for ev := range events {
-	switch ev.Type {
+		var str string
+		if json.Unmarshal(
+			m.Content,
+			&str,
+		) == nil {
+			content = str
+		}
 
-	case providers.EventRawSSE:
-		if err := streaming.WriteEvent(
-			w,
-			flusher,
-			requestID,
-			ev.Raw,
-		); err != nil {
-			s.metrics.Disconnects.Inc()
+		pReq.Messages = append(
+			pReq.Messages,
+			providers.Message{
+				Role:    m.Role,
+				Content: content,
+			},
+		)
+	}
+
+	events := make(chan providers.ProviderEvent, 64)
+
+	done := make(chan error, 1)
+
+	go func() {
+		done <- prov.Complete(
+			r.Context(),
+			pReq,
+			events,
+		)
+	}()
+
+	for ev := range events {
+		switch ev.Type {
+
+		case providers.EventRawSSE:
+			if err := streaming.WriteEvent(
+				w,
+				flusher,
+				requestID,
+				ev.Raw,
+			); err != nil {
+				s.metrics.Disconnects.Inc()
+				return
+			}
+
+		case providers.EventDone:
+			s.jobs.Update(
+				requestID,
+				func(j *jobs.Job) {
+					j.Status = protocol.StatusCompleted
+				},
+			)
+
+			_ = streaming.WriteDone(
+				w,
+				flusher,
+			)
+
+			return
+
+		case providers.EventError:
+			s.metrics.RequestsFailed.
+				WithLabelValues(route.Provider).
+				Inc()
+
+			s.jobs.Update(
+				requestID,
+				func(j *jobs.Job) {
+					j.Status = protocol.StatusFailed
+					if ev.Err != nil {
+						j.Error = ev.Err.Error()
+					}
+				},
+			)
+
+			message := "provider error"
+
+			if ev.Err != nil {
+				message = ev.Err.Error()
+			}
+
+			data, _ := json.Marshal(
+				map[string]any{
+					"error": map[string]string{
+						"message": message,
+					},
+				},
+			)
+
+			_ = streaming.WriteEvent(
+				w,
+				flusher,
+				requestID,
+				string(data),
+			)
+
+			_ = streaming.WriteDone(
+				w,
+				flusher,
+			)
+
 			return
 		}
-
-	case providers.EventDone:
-		s.jobs.Update(
-			requestID,
-			func(j *jobs.Job) {
-				j.Status = protocol.StatusCompleted
-			},
-		)
-
-		_ = streaming.WriteDone(
-			w,
-			flusher,
-		)
-
-		return
-
-	case providers.EventError:
-		s.metrics.RequestsFailed.
-			WithLabelValues(route.Provider).
-			Inc()
-
-		s.jobs.Update(
-			requestID,
-			func(j *jobs.Job) {
-				j.Status = protocol.StatusFailed
-				if ev.Err != nil {
-					j.Error = ev.Err.Error()
-				}
-			},
-		)
-
-		message := "provider error"
-
-		if ev.Err != nil {
-			message = ev.Err.Error()
-		}
-
-		data, _ := json.Marshal(
-			map[string]any{
-				"error": map[string]string{
-					"message": message,
-				},
-			},
-		)
-
-		_ = streaming.WriteEvent(
-			w,
-			flusher,
-			requestID,
-			string(data),
-		)
-
-		_ = streaming.WriteDone(
-			w,
-			flusher,
-		)
-
-		return
 	}
-}
 
-// Complete() обязательно закрывает events.
-//
-// Получаем его итоговую ошибку только после завершения
-// чтения канала.
-if err := <-done; err != nil {
-	s.log.Warn(
-		"direct provider error",
-		"request_id",
-		requestID,
-		"provider",
-		route.Provider,
-		"err",
-		err,
-	)
-}
+	// Complete() обязательно закрывает events.
+	//
+	// Получаем его итоговую ошибку только после завершения
+	// чтения канала.
+	if err := <-done; err != nil {
+		s.log.Warn(
+			"direct provider error",
+			"request_id",
+			requestID,
+			"provider",
+			route.Provider,
+			"err",
+			err,
+		)
+	}
 
 }
 
@@ -823,178 +823,176 @@ if err := <-done; err != nil {
 // Для Worker-backed heavy request здесь происходит важнейшее
 // преобразование:
 //
-//     protocol.TypeStarted
-//         -> metadata SSE
+//	protocol.TypeStarted
+//	    -> metadata SSE
 //
-//     protocol.TypeCompleted
-//         -> OpenAI-compatible final chunk
+//	protocol.TypeCompleted
+//	    -> OpenAI-compatible final chunk
 //
-//     protocol.TypeFailed
-//         -> SSE error
+//	protocol.TypeFailed
+//	    -> SSE error
 //
-//     protocol.TypeRawSSE
-//         -> raw provider SSE
+//	protocol.TypeRawSSE
+//	    -> raw provider SSE
 func (s *Server) writeEvent(
-w http.ResponseWriter,
-flusher http.Flusher,
-ev protocol.Event,
+	w http.ResponseWriter,
+	flusher http.Flusher,
+	ev protocol.Event,
 ) error {
-switch ev.Type {
+	switch ev.Type {
 
-case protocol.TypeRawSSE:
-	var p protocol.RawSSEPayload
+	case protocol.TypeRawSSE:
+		var p protocol.RawSSEPayload
 
-	if json.Unmarshal(
-		ev.Payload,
-		&p,
-	) == nil {
-		return streaming.WriteEvent(
-			w,
-			flusher,
-			ev.EventID,
-			p.Data,
-		)
-	}
+		if json.Unmarshal(
+			ev.Payload,
+			&p,
+		) == nil {
+			return streaming.WriteEvent(
+				w,
+				flusher,
+				ev.EventID,
+				p.Data,
+			)
+		}
 
-	return nil
+		return nil
 
-case protocol.TypeCompleted:
-	var p protocol.CompletedPayload
+	case protocol.TypeCompleted:
+		var p protocol.CompletedPayload
 
-	if err := json.Unmarshal(
-		ev.Payload,
-		&p,
-	); err != nil {
-		return err
-	}
+		if err := json.Unmarshal(
+			ev.Payload,
+			&p,
+		); err != nil {
+			return err
+		}
 
-	// --------------------------------------------------------
-	// 1. Content
-	// --------------------------------------------------------
-	//
-	// В streaming-режиме worker content уже доставлен клиенту
-	// как raw SSE-события (type=raw_sse). Повторная отправка
-	// агрегированного content дублировала бы текст, поэтому
-	// здесь отправляем только финальный finish-чанк.
-	//
-	// Для non-streaming событий (старые/другие producer'ы)
-	// поведение остаётся прежним.
+		// --------------------------------------------------------
+		// 1. Content
+		// --------------------------------------------------------
+		//
+		// В streaming-режиме worker content уже доставлен клиенту
+		// как raw SSE-события (type=raw_sse). Повторная отправка
+		// агрегированного content дублировала бы текст, поэтому
+		// здесь отправляем только финальный finish-чанк.
+		//
+		// Для non-streaming событий (старые/другие producer'ы)
+		// поведение остаётся прежним.
 
-	if !p.Stream && p.Content != "" {
-		contentChunk := map[string]any{
+		if !p.Stream && p.Content != "" {
+			contentChunk := map[string]any{
+				"id":     ev.RequestID,
+				"object": "chat.completion.chunk",
+				"choices": []any{
+					map[string]any{
+						"index": 0,
+						"delta": map[string]any{
+							"content": p.Content,
+						},
+						"finish_reason": nil,
+					},
+				},
+			}
+
+			data, err := json.Marshal(contentChunk)
+			if err != nil {
+				return err
+			}
+
+			if err := streaming.WriteEvent(
+				w,
+				flusher,
+				ev.EventID,
+				string(data),
+			); err != nil {
+				return err
+			}
+		}
+
+		// --------------------------------------------------------
+		// 2. Finish
+		// --------------------------------------------------------
+
+		finishReason := p.FinishReason
+
+		if finishReason == "" {
+			finishReason = "stop"
+		}
+
+		finishChunk := map[string]any{
 			"id":     ev.RequestID,
 			"object": "chat.completion.chunk",
 			"choices": []any{
 				map[string]any{
-					"index": 0,
-					"delta": map[string]any{
-						"content": p.Content,
-					},
-					"finish_reason": nil,
+					"index":         0,
+					"delta":         map[string]any{},
+					"finish_reason": finishReason,
 				},
 			},
 		}
 
-		data, err := json.Marshal(contentChunk)
+		data, err := json.Marshal(finishChunk)
 		if err != nil {
 			return err
 		}
 
-		if err := streaming.WriteEvent(
+		return streaming.WriteEvent(
 			w,
 			flusher,
 			ev.EventID,
 			string(data),
-		); err != nil {
+		)
+
+	case protocol.TypeFailed:
+		var p protocol.FailedPayload
+
+		_ = json.Unmarshal(
+			ev.Payload,
+			&p,
+		)
+
+		data, err := json.Marshal(
+			map[string]any{
+				"id":     ev.RequestID,
+				"object": "chat.completion.chunk",
+				"error": map[string]string{
+					"message": p.Error,
+				},
+			},
+		)
+
+		if err != nil {
 			return err
 		}
+
+		return streaming.WriteEvent(
+			w,
+			flusher,
+			ev.EventID,
+			string(data),
+		)
+
+	case protocol.TypeCancelled:
+		return streaming.WriteEvent(
+			w,
+			flusher,
+			ev.EventID,
+			`{"id":"`+
+				ev.RequestID+
+				`","object":"chat.completion.chunk","error":{"message":"request cancelled"}}`,
+		)
+
+	default:
+		return streaming.WriteEvent(
+			w,
+			flusher,
+			ev.EventID,
+			metaChunk(ev),
+		)
 	}
-
-	// --------------------------------------------------------
-	// 2. Finish
-	// --------------------------------------------------------
-
-	finishReason := p.FinishReason
-
-	if finishReason == "" {
-		finishReason = "stop"
-	}
-
-	finishChunk := map[string]any{
-		"id":     ev.RequestID,
-		"object": "chat.completion.chunk",
-		"choices": []any{
-			map[string]any{
-				"index": 0,
-				"delta": map[string]any{},
-				"finish_reason": finishReason,
-			},
-		},
-	}
-
-	data, err := json.Marshal(finishChunk)
-	if err != nil {
-		return err
-	}
-
-	return streaming.WriteEvent(
-		w,
-		flusher,
-		ev.EventID,
-		string(data),
-	)
-
-case protocol.TypeFailed:
-	var p protocol.FailedPayload
-
-	_ = json.Unmarshal(
-		ev.Payload,
-		&p,
-	)
-
-	data, err := json.Marshal(
-		map[string]any{
-			"id":     ev.RequestID,
-			"object": "chat.completion.chunk",
-			"error": map[string]string{
-				"message": p.Error,
-			},
-		},
-	)
-
-	if err != nil {
-		return err
-	}
-
-	return streaming.WriteEvent(
-		w,
-		flusher,
-		ev.EventID,
-		string(data),
-	)
-
-case protocol.TypeCancelled:
-	return streaming.WriteEvent(
-		w,
-		flusher,
-		ev.EventID,
-		`{"id":"`+
-			ev.RequestID+
-			`","object":"chat.completion.chunk","error":{"message":"request cancelled"}}`,
-	)
-
-default:
-	return streaming.WriteEvent(
-		w,
-		flusher,
-		ev.EventID,
-		metaChunk(ev),
-	)
-}
 
 }
-
-
 
 func isTerminal(t string) bool {
 	return t == protocol.TypeCompleted ||
@@ -1009,131 +1007,129 @@ func isTerminal(t string) bool {
 //
 // Раньше completed event:
 //
-//     {
-//       "payload": {
-//         "content": "ответ модели"
-//       }
-//     }
+//	{
+//	  "payload": {
+//	    "content": "ответ модели"
+//	  }
+//	}
 //
 // превращался в:
 //
-//     {
-//       "choices": [{
-//         "delta": {},
-//         "finish_reason": "stop"
-//       }]
-//     }
+//	{
+//	  "choices": [{
+//	    "delta": {},
+//	    "finish_reason": "stop"
+//	  }]
+//	}
 //
 // Поэтому клиент видел только факт завершения.
 //
 // Теперь Content попадает в:
 //
-//     choices[0].delta.content
+//	choices[0].delta.content
 //
 // То есть клиент получит:
 //
-//     data: {
-//       "id":"...",
-//       "object":"chat.completion.chunk",
-//       "choices":[{
-//         "index":0,
-//         "delta":{
-//           "content":"ответ модели"
-//         },
-//         "finish_reason":"stop"
-//       }]
-//     }
+//	data: {
+//	  "id":"...",
+//	  "object":"chat.completion.chunk",
+//	  "choices":[{
+//	    "index":0,
+//	    "delta":{
+//	      "content":"ответ модели"
+//	    },
+//	    "finish_reason":"stop"
+//	  }]
+//	}
 //
 // Это минимальное изменение, потому что Worker уже сохранил
 // весь результат в CompletedPayload.Content.
 func terminalChunk(ev protocol.Event) string {
-if ev.Type == protocol.TypeFailed {
-var p protocol.FailedPayload
-_ = json.Unmarshal(ev.Payload, &p)
+	if ev.Type == protocol.TypeFailed {
+		var p protocol.FailedPayload
+		_ = json.Unmarshal(ev.Payload, &p)
 
-	return `{"id":"` +
-		ev.RequestID +
-		`","object":"chat.completion.chunk","error":{"message":"` +
-		jsonEscape(p.Error) +
-		`"}}`
-}
+		return `{"id":"` +
+			ev.RequestID +
+			`","object":"chat.completion.chunk","error":{"message":"` +
+			jsonEscape(p.Error) +
+			`"}}`
+	}
 
-var p protocol.CompletedPayload
+	var p protocol.CompletedPayload
 
-if err := json.Unmarshal(
-	ev.Payload,
-	&p,
-); err != nil {
-	return `{"id":"` +
-		ev.RequestID +
-		`","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
-}
+	if err := json.Unmarshal(
+		ev.Payload,
+		&p,
+	); err != nil {
+		return `{"id":"` +
+			ev.RequestID +
+			`","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`
+	}
 
-fr := p.FinishReason
+	fr := p.FinishReason
 
-if fr == "" {
-	fr = "stop"
-}
+	if fr == "" {
+		fr = "stop"
+	}
 
-// ВАЖНО:
-//
-// CompletedPayload.Content содержит весь ответ LLM,
-// потому что текущий Worker работает в non-streaming режиме.
-//
-// Поэтому сначала отправляем content chunk.
-//
-// Затем отдельный finish chunk отправляется обычным
-// terminal event lifecycle.
-if p.Content != "" {
-	contentChunk := map[string]any{
-		"id":     ev.RequestID,
-		"object": "chat.completion.chunk",
-		"choices": []any{
-			map[string]any{
-				"index": 0,
-				"delta": map[string]any{
-					"content": p.Content,
+	// ВАЖНО:
+	//
+	// CompletedPayload.Content содержит весь ответ LLM,
+	// потому что текущий Worker работает в non-streaming режиме.
+	//
+	// Поэтому сначала отправляем content chunk.
+	//
+	// Затем отдельный finish chunk отправляется обычным
+	// terminal event lifecycle.
+	if p.Content != "" {
+		contentChunk := map[string]any{
+			"id":     ev.RequestID,
+			"object": "chat.completion.chunk",
+			"choices": []any{
+				map[string]any{
+					"index": 0,
+					"delta": map[string]any{
+						"content": p.Content,
+					},
+					"finish_reason": nil,
 				},
-				"finish_reason": nil,
 			},
-		},
+		}
+
+		b, err := json.Marshal(contentChunk)
+		if err == nil {
+			// Один terminalChunk может вернуть только один SSE data.
+			//
+			// Поэтому для совместимости с текущей архитектурой
+			// content и finish нужно разделить.
+			//
+			// Этот вариант используется только как fallback.
+			return string(b)
+		}
 	}
 
-	b, err := json.Marshal(contentChunk)
-	if err == nil {
-		// Один terminalChunk может вернуть только один SSE data.
-		//
-		// Поэтому для совместимости с текущей архитектурой
-		// content и finish нужно разделить.
-		//
-		// Этот вариант используется только как fallback.
-		return string(b)
-	}
-}
-
-return `{"id":"` +
-	ev.RequestID +
-	`","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"` +
-	jsonEscape(fr) +
-	`"}]}`
+	return `{"id":"` +
+		ev.RequestID +
+		`","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"` +
+		jsonEscape(fr) +
+		`"}]}`
 
 }
-
-
 
 // metaChunk creates a small OpenAI-compatible chunk containing
 // Gateway metadata.
 //
 // Например:
 //
-//     {
-//       "id": "...",
-//       "object": "chat.completion.chunk",
-//       "_meta": {
-//         "type": "started",
-//         "sequence": 1
-//       }
-//     }
+//	{
+//	  "id": "...",
+//	  "object": "chat.completion.chunk",
+//	  "_meta": {
+//	    "type": "started",
+//	    "sequence": 1
+//	  }
+//	}
 func metaChunk(ev protocol.Event) string {
 	return `{"id":"` +
 		ev.RequestID +

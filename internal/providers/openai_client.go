@@ -605,8 +605,8 @@ func (c *OpenAIClient) completeNonStreaming(
 		Model:   result.Model,
 		Choices: []protocol.ChunkChoice{
 			{
-				Index: 0,
-				Delta: protocol.ChatMessage{},
+				Index:        0,
+				Delta:        protocol.ChatMessage{},
 				FinishReason: &finishReason,
 			},
 		},
